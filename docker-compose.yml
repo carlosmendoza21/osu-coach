@@ -1,0 +1,61 @@
+x-app-env: &app-env
+  DATABASE_URL: postgresql+psycopg://osu:osu@postgres:5432/osu_coach
+  REDIS_URL: redis://redis:6379/0
+  OSU_CLIENT_ID: ${OSU_CLIENT_ID:-}
+  OSU_CLIENT_SECRET: ${OSU_CLIENT_SECRET:-}
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: osu
+      POSTGRES_PASSWORD: osu
+      POSTGRES_DB: osu_coach
+    ports: ["5432:5432"]
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U osu -d osu_coach"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    ports: ["6379:6379"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  # Runs migrations once, then exits. api and worker wait for it.
+  migrate:
+    build: .
+    command: ["alembic", "upgrade", "head"]
+    environment: *app-env
+    depends_on:
+      postgres: { condition: service_healthy }
+
+  api:
+    build: .
+    environment: *app-env
+    ports: ["8000:8000"]
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      redis: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  worker:
+    build: .
+    command: ["celery", "-A", "osu_coach.worker", "worker", "--loglevel=info", "--concurrency=2"]
+    environment: *app-env
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      redis: { condition: service_healthy }
+
+volumes:
+  pgdata:
