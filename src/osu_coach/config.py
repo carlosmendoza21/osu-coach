@@ -1,5 +1,6 @@
 from functools import lru_cache
 
+from pydantic import SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -12,9 +13,9 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+psycopg://osu:osu@localhost:5432/osu_coach"
     redis_url: str = "redis://localhost:6379/0"
 
-    # osu! API v2 (client credentials). Used from Day 2.
+    # osu! API v2 (client credentials)
     osu_client_id: str = ""
-    osu_client_secret: str = ""
+    osu_client_secret: SecretStr = SecretStr("")
 
 
 @lru_cache
