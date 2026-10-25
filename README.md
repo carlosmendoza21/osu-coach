@@ -43,9 +43,12 @@ uv run pytest                  # unit tests (default, what CI runs)
 uv run pytest -m integration   # live tests: real Redis + real osu! API
 ```
 
-**Unit tests** ([`tests/unit/`](tests/unit), 23 tests): call the code directly with nothing
-running. `respx` fakes the osu! token endpoint (and blocks any unmocked request), and
-`fakeredis` stands in for Redis.
+**Unit tests** ([`tests/unit/`](tests/unit), 43 tests): call the code directly with nothing
+running. `respx` fakes the osu! token endpoint (and blocks any unmocked request),
+`fakeredis` stands in for Redis, and the rate limiter gets a fake clock, so a 60 s window
+runs instantly.
+
+*osu! token* (22):
 - `get_token` cache: a cache hit makes no osu! request, a miss fetches and stores, a second
   call reuses the token, the TTL is `expires_in` minus a 60 s margin, and an expired entry
   triggers a new fetch
@@ -57,18 +60,45 @@ running. `respx` fakes the osu! token endpoint (and blocks any unmocked request)
 - No leaks: neither the client secret nor the token appears in any error, and failed
   fetches never write to the cache
 
-**Integration tests** ([`tests/integration/`](tests/integration), 4 tests): use real
-Redis and the real osu! API with the credentials in `.env`. They skip with the reason if
-Redis isn't running (`docker compose up -d redis`) or the credentials are missing, and
-delete the cached token key before and after each test.
+*Rate limiter* (20):
+- Allows exactly `limit` requests per window (1, 3 and 60), then refuses; refused attempts
+  are never stored, so retries can't keep the window full
+- The wait is until the oldest entry leaves the window; boundary: refused at 59.999 s,
+  allowed at 60 s
+- Requests at the same moment are all counted (unique members); 20 callers on one key
+  share the limit; different keys are independent
+- The key expires after the window, rounded up and never 0
+- `acquire` doesn't sleep under the limit, spreads requests over windows
+  (`0, 0, 60, 60, 120` s for a limit of 2), and records its slot even if it slept longer
+  than asked. A fake-clock guard fails the test instead of hanging if `acquire` would wait
+  forever
+
+**Integration tests** ([`tests/integration/`](tests/integration), 9 tests): use real
+Redis, real time, real processes, and the real osu! API with the credentials in `.env`.
+They skip with the reason if Redis isn't running (`docker compose up -d redis`) or the
+credentials are missing, and clean up their Redis keys even if a check fails.
+
+*osu! token* (4):
 - A real token is cached with a TTL of about 86,340 s
 - A second call makes no new request to osu!
 - The token is accepted by the API (`GET /beatmaps/75` returns 200)
 - A wrong secret raises `OsuAuthError` and caches nothing
 
-The unit tests were checked against deliberately broken versions of `auth.py`: removing the
-expiry margin, the `400`/`401` check, or the cache read, sending the masked secret, or
-putting the reply in the error message each make at least one test fail.
+*Rate limiter* (5):
+- In real time, 3-per-second lets the first three through at once and the next two after
+  about 1 s
+- The key gets a real TTL
+- 20 Redis connections at once, and 4 or 8 separate processes firing at the same moment
+  (3 rounds each), never let more than the limit through. A first version that counted
+  and then added in separate calls let 4 through a limit of 3 here
+
+Both suites were checked against deliberately broken code:
+- `auth.py`: removing the expiry margin, the `400`/`401` check, or the cache read, sending
+  the masked secret, or putting the reply in the error message
+- `ratelimiter.py`: allowing one too few (`<` for `<=`), keeping refused entries, dropping
+  the key expiry, a wrong wait time, or non-unique members
+
+Each makes at least one test fail.
 
 ## Layout
 
@@ -77,6 +107,7 @@ src/osu_coach/
   main.py      FastAPI app
   api/         routers (/health so far)
   osu/auth.py  osu! API token (client credentials), cached in Redis
+  osu/ratelimiter.py  shared rate limit for osu! requests (sliding window in Redis)
   config.py    settings from env / .env
   db.py        async SQLAlchemy engine + session dependency
   models.py    SQLAlchemy declarative base
