@@ -43,7 +43,7 @@ uv run pytest                  # unit tests (default, what CI runs)
 uv run pytest -m integration   # live tests: real Redis + real osu! API
 ```
 
-**Unit tests** ([`tests/unit/`](tests/unit), 43 tests): call the code directly with nothing
+**Unit tests** ([`tests/unit/`](tests/unit), 128 tests): call the code directly with nothing
 running. `respx` fakes the osu! token endpoint (and blocks any unmocked request),
 `fakeredis` stands in for Redis, and the rate limiter gets a fake clock, so a 60 s window
 runs instantly.
@@ -73,6 +73,17 @@ runs instantly.
   than asked. A fake-clock guard fails the test instead of hanging if `acquire` would wait
   forever
 
+*Retries* (85, no network and no real waiting):
+- Backoff doubles from 1 s to a 30 s cap with full jitter, and stays within the jitter range
+- `Retry-After`: numbers are used, and negative, `inf`, `nan`, dates and junk fall back to
+  backoff; every wait is capped, so a server can't make us sleep for a day
+- Bad policies (`max_attempts` < 1, negative delays) are refused
+- `429` and `5xx` are retried; `400`, `401`, `403`, `404` and other permanent statuses
+  return at once
+- No wait after the last attempt; the last response goes back to the caller
+- Network errors (connect, timeouts, dropped connections) back off and are raised on the
+  last attempt; our own bugs and errors like redirect loops are never retried
+
 **Integration tests** ([`tests/integration/`](tests/integration), 9 tests): use real
 Redis, real time, real processes, and the real osu! API with the credentials in `.env`.
 They skip with the reason if Redis isn't running (`docker compose up -d redis`) or the
@@ -97,6 +108,9 @@ Both suites were checked against deliberately broken code:
   the masked secret, or putting the reply in the error message
 - `ratelimiter.py`: allowing one too few (`<` for `<=`), keeping refused entries, dropping
   the key expiry, a wrong wait time, or non-unique members
+- `retry.py`: sleeping after the last attempt, no backoff for network errors, no cap on
+  waits, accepting `Retry-After: inf`, narrow additive jitter, retrying every exception,
+  allowing `max_attempts=0`, or retrying `404`
 
 Each makes at least one test fail.
 
@@ -108,6 +122,7 @@ src/osu_coach/
   api/         routers (/health so far)
   osu/auth.py  osu! API token (client credentials), cached in Redis
   osu/ratelimiter.py  shared rate limit for osu! requests (sliding window in Redis)
+  osu/retry.py        retries for temporary failures (backoff, jitter, Retry-After)
   config.py    settings from env / .env
   db.py        async SQLAlchemy engine + session dependency
   models.py    SQLAlchemy declarative base
