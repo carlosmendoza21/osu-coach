@@ -52,6 +52,13 @@ class TokenProvider:
 
         return token_data.access_token
 
+    async def invalidate(self) -> None:
+        """Forget the cached token, so the next get_token() fetches a new one.
+
+        For when osu! rejects a cached token early (e.g. it was revoked).
+        """
+        await self.redis_client.delete(CACHE_KEY)
+
     async def _fetch_token(self) -> TokenResponse:
         """Fetch a new token from osu! API."""
         data = {

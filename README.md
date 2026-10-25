@@ -43,7 +43,7 @@ uv run pytest                  # unit tests (default, what CI runs)
 uv run pytest -m integration   # live tests: real Redis + real osu! API
 ```
 
-**Unit tests** ([`tests/unit/`](tests/unit), 167 tests): call the code directly with nothing
+**Unit tests** ([`tests/unit/`](tests/unit), 203 tests): call the code directly with nothing
 running. `respx` fakes the osu! token endpoint (and blocks any unmocked request),
 `fakeredis` stands in for Redis, and the rate limiter gets a fake clock, so a 60 s window
 runs instantly.
@@ -97,7 +97,20 @@ runs instantly.
   is rejected rather than misread
 - Parsed objects are read-only
 
-**Integration tests** ([`tests/integration/`](tests/integration), 14 tests): use real
+*API client* (36), with osu! faked by `respx`, fakeredis, a fake clock for the rate limiter,
+and recorded retry waits:
+- Requests: users by id (`key=id`) or username (`key=username`, escaped: spaces,
+  brackets, `/`, and all-digit names), best and recent scores with the right `mode`,
+  `limit` and `include_fails`, and the cached token on every request
+- `limit` outside 1-100 is rejected before any request; an empty score list is fine
+- Every attempt, retries included, takes a rate-limit slot; the limiter makes calls wait;
+  `429`, `5xx` and network errors are retried
+- A `401` clears the cached token and retries exactly once with a new one; a second `401`
+  is an error, not a loop
+- `404` raises `OsuNotFoundError`; other errors raise `OsuApiError` (its parent); errors
+  never contain the token or secret
+
+**Integration tests** ([`tests/integration/`](tests/integration), 21 tests): use real
 Redis, real time, real processes, and the real osu! API with the credentials in `.env`.
 They skip with the reason if Redis isn't running (`docker compose up -d redis`) or the
 credentials are missing, and clean up their Redis keys even if a check fails.
@@ -121,6 +134,13 @@ credentials are missing, and clean up their Redis keys even if a check fails.
   username, 50 best scores each for the top 3, and recent plays including fails
 - An unknown username returns `404`
 
+*API client* (7, real osu! and Redis):
+- The same player by username and by id; 50 best scores, best first, and `limit=5`
+  matching the first five; recent plays of the current top 10
+- Unknown usernames, including the all-digit `"2"`, raise `OsuNotFoundError`
+- A rejected cached token recovers: user (401), new token, user again
+- Each API request takes exactly one rate-limit slot
+
 Both suites were checked against deliberately broken code:
 - `auth.py`: removing the expiry margin, the `400`/`401` check, or the cache read, sending
   the masked secret, or putting the reply in the error message
@@ -132,6 +152,10 @@ Both suites were checked against deliberately broken code:
 - `schemas.py`: forbidding extra fields, not freezing, making ranks or `pp` non-nullable,
   dropping the `od` alias or also accepting `od` by name, dropping a hit count, or
   loosening `mods` to a string
+- `client.py`: asking the limiter without waiting, skipping it, not clearing the token or
+  not retrying after a `401`, not treating `404` as not found, only counting `5xx` as
+  errors, dropping `key=username`, not escaping usernames, an off-by-one `limit` check,
+  inverting `include_fails`, or putting the token in an error message
 
 Each makes at least one test fail.
 
@@ -145,6 +169,7 @@ src/osu_coach/
   osu/ratelimiter.py  shared rate limit for osu! requests (sliding window in Redis)
   osu/retry.py        retries for temporary failures (backoff, jitter, Retry-After)
   osu/schemas.py      typed models of the osu! API responses we use
+  osu/client.py       osu! API client: token, rate limit, retries, typed results
   config.py    settings from env / .env
   db.py        async SQLAlchemy engine + session dependency
   models.py    SQLAlchemy declarative base
