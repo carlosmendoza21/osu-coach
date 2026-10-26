@@ -24,7 +24,13 @@ def run_migrations_online() -> None:
     # psycopg v3 URLs work for both the async app engine and this sync engine.
     engine = create_engine(DATABASE_URL, poolclass=pool.NullPool)
     with engine.connect() as connection:
-        context.configure(connection=connection, target_metadata=target_metadata)
+        context.configure(
+            connection=connection,
+            target_metadata=target_metadata,
+            # Off by default: without it, autogenerate and `alembic check` miss a changed
+            # or missing server default (e.g. a play date silently defaulting to now()).
+            compare_server_default=True,
+        )
         with context.begin_transaction():
             context.run_migrations()
 
