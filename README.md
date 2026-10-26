@@ -43,9 +43,12 @@ uv run pytest                  # unit tests (default)
 uv run pytest -m integration   # live tests: real Postgres, Redis and osu! API
 ```
 
-CI runs the unit tests and the Postgres tests on every push.
+CI runs the unit tests and the Postgres tests (tables and sync) on every push.
 
-**Unit tests** ([`tests/unit/`](tests/unit), 237 tests): call the code directly with nothing
+On Windows, async database code needs a selector event loop (psycopg can't use the
+default one); `tests/conftest.py` sets it for the tests, and the worker task sets it too.
+
+**Unit tests** ([`tests/unit/`](tests/unit), 259 tests): call the code directly with nothing
 running. `respx` fakes the osu! token endpoint (and blocks any unmocked request),
 `fakeredis` stands in for Redis, and the rate limiter gets a fake clock, so a 60 s window
 runs instantly.
@@ -121,7 +124,17 @@ and recorded retry waits:
 - Only the indexes queries use: `username` (not unique: names can be reused), `beatmap_id`,
   and `(player_id, pp)`
 
-**Integration tests** ([`tests/integration/`](tests/integration), 34 tests): use real
+*Sync* (22), with a fake osu! client serving the saved responses and a fake session whose
+statements are compiled to Postgres SQL:
+- `player_values` / `score_values` fill every column from the right osu! field
+- Upserts are `INSERT ... ON CONFLICT DO UPDATE` on the osu! id, updating every column but
+  the id, and `updated_at = now()` for players; all scores go in one statement, with
+  duplicates (a play in both best and recent) removed first
+- Order: player, then scores, then one commit; scores are fetched by the resolved id;
+  limits are passed on
+- If osu! fails at any of the three requests, nothing is written
+
+**Integration tests** ([`tests/integration/`](tests/integration), 48 tests): use real
 Redis, real time, real processes, and the real osu! API with the credentials in `.env`.
 They skip with the reason if Redis isn't running (`docker compose up -d redis`) or the
 credentials are missing, and clean up their Redis keys even if a check fails.
@@ -162,6 +175,19 @@ migrated with Alembic exactly as deployment does, and dropped afterwards
   missing play date is refused
 - "A player's best scores" uses the `(player_id, pp)` index, already in pp order (no sort)
 
+*Sync* (11, Postgres; also run in CI), on its own test database:
+- A first sync saves the player and scores; a second gives the same rows (idempotent),
+  moves `updated_at`, and updates changed values
+- Failed plays are saved without pp; a play in both lists is saved once; mods and the
+  play time survive
+- All or nothing: an osu! failure saves nothing, and a database error while saving scores
+  rolls back the player too
+- A real sync of peppy from osu! (needs Redis and credentials)
+
+*Worker* (3, the full stack running): `osu_sync` through the real Celery worker returns
+peppy's summary, repeated syncs don't duplicate rows, and an unknown player fails the task
+with `OsuNotFoundError`. It writes to the dev database, like the app.
+
 Both suites were checked against deliberately broken code:
 - `auth.py`: removing the expiry margin, the `400`/`401` check, or the cache read, sending
   the masked secret, or putting the reply in the error message
@@ -181,6 +207,9 @@ Both suites were checked against deliberately broken code:
   dropping `CASCADE`, a 32-bit score id, swapping the index columns, an extra index, or
   dropping the timezone. The default case first slipped past `alembic check`, which
   ignores server defaults unless `compare_server_default` is on; it now is
+- `sync.py`: not removing duplicates, not setting `updated_at`, committing part-way,
+  writing before all data is fetched, scores before the player, updating only some
+  columns, ignoring the limit, a wrong play time, or dropping recent scores
 
 Each makes at least one test fail.
 
@@ -195,10 +224,11 @@ src/osu_coach/
   osu/retry.py        retries for temporary failures (backoff, jitter, Retry-After)
   osu/schemas.py      typed models of the osu! API responses we use
   osu/client.py       osu! API client: token, rate limit, retries, typed results
+  sync.py      save a player and their scores from osu! (upserts, one transaction)
   config.py    settings from env / .env
   db.py        async SQLAlchemy engine + session dependency
   models.py    SQLAlchemy declarative base
-  worker.py    Celery app
+  worker.py    Celery app and the osu_sync task
 migrations/    Alembic
 tests/
   unit/        no services needed

@@ -3,83 +3,28 @@
 Run with:  uv run pytest -m integration
 Needs:     Postgres (docker compose up -d postgres). Skips with the reason if it isn't
            reachable. Redis and osu! credentials aren't needed.
-Creates a separate `<db>_test` database, migrates it with Alembic exactly as deployment
-does, and drops it afterwards, so the dev database is never touched.
+Uses a separate `<db>_test` database, migrated with Alembic exactly as deployment does
+(see conftest.py), so the dev database is never touched.
 """
 
-import json
-import os
-import subprocess
-import sys
 from collections.abc import Iterator
-from pathlib import Path
-from typing import Any
 
 import pytest
 from alembic.config import Config
 from alembic.script import ScriptDirectory
-from sqlalchemy import Engine, create_engine, inspect, text
-from sqlalchemy.engine import URL, make_url
-from sqlalchemy.exc import IntegrityError, OperationalError
+from sqlalchemy import Engine, inspect, text
+from sqlalchemy.engine import URL
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from osu_coach.config import get_settings
 from osu_coach.models import Player, Score
 from osu_coach.osu.schemas import OsuScore, OsuUser
+from osu_coach.sync import player_values, score_values
+from tests.support import ROOT, alembic, load
 
 pytestmark = pytest.mark.integration
 
-ROOT = Path(__file__).parent.parent.parent
-FIXTURES = ROOT / "tests" / "fixtures" / "osu"
 HEAD = ScriptDirectory.from_config(Config(str(ROOT / "alembic.ini"))).get_current_head()
-
-
-def alembic(url: URL, *args: str) -> subprocess.CompletedProcess[str]:
-    """Run the alembic CLI against `url`, the way deployment does."""
-    env = {**os.environ, "DATABASE_URL": url.render_as_string(hide_password=False)}
-    return subprocess.run(
-        [sys.executable, "-m", "alembic", *args],
-        cwd=ROOT,
-        env=env,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-
-
-# ---------- Test database ----------
-
-
-@pytest.fixture(scope="module")
-def test_url() -> Iterator[URL]:
-    dev = make_url(get_settings().database_url)
-    url = dev.set(database=f"{dev.database}_test")
-    admin = create_engine(dev.set(database="postgres"), isolation_level="AUTOCOMMIT")
-    try:
-        with admin.connect() as conn:
-            conn.execute(text(f'DROP DATABASE IF EXISTS "{url.database}" WITH (FORCE)'))
-            conn.execute(text(f'CREATE DATABASE "{url.database}"'))
-    except OperationalError:
-        admin.dispose()
-        pytest.skip(
-            f"Postgres not reachable at {dev.host}:{dev.port}. "
-            "Start it: docker compose up -d postgres"
-        )
-
-    result = alembic(url, "upgrade", "head")
-    assert result.returncode == 0, result.stderr
-    yield url
-
-    with admin.connect() as conn:  # runs even if tests failed
-        conn.execute(text(f'DROP DATABASE IF EXISTS "{url.database}" WITH (FORCE)'))
-    admin.dispose()
-
-
-@pytest.fixture(scope="module")
-def engine(test_url: URL) -> Iterator[Engine]:
-    eng = create_engine(test_url)
-    yield eng
-    eng.dispose()
 
 
 @pytest.fixture
@@ -91,41 +36,13 @@ def session(engine: Engine) -> Iterator[Session]:
         conn.execute(text("TRUNCATE players, scores"))
 
 
-def load(name: str) -> Any:
-    return json.loads((FIXTURES / name).read_text(encoding="utf-8"))
-
-
+# The rows come from the same mapping the sync uses, so these tests cover it too.
 def player_row(user: OsuUser) -> Player:
-    return Player(
-        osu_id=user.id,
-        username=user.username,
-        country=user.country_code,
-        global_rank=user.statistics.global_rank,
-        pp=user.statistics.pp,
-        playcount=user.statistics.play_count,
-        accuracy=user.statistics.hit_accuracy,
-    )
+    return Player(**player_values(user))
 
 
 def score_row(score: OsuScore) -> Score:
-    s = score.statistics
-    return Score(
-        id=score.id,
-        player_id=score.user_id,
-        beatmap_id=score.beatmap.id,
-        score=score.score,
-        max_combo=score.max_combo,
-        count_300=s.count_300,
-        count_100=s.count_100,
-        count_50=s.count_50,
-        count_miss=s.count_miss,
-        rank=score.rank,
-        pp=score.pp,
-        mods=score.mods,
-        date=score.created_at,
-        accuracy=score.accuracy,
-        passed=score.passed,
-    )
+    return Score(**score_values(score))
 
 
 def a_player(osu_id: int = 999) -> Player:

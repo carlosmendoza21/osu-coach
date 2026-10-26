@@ -41,7 +41,9 @@ jobs:
       - name: Pytest
         run: uv run pytest -q
       - name: Database tests (real Postgres, separate test database)
-        run: uv run pytest -m integration tests/integration/test_models_live.py -q
+        run: >
+          uv run pytest -m integration -q -rs
+          tests/integration/test_models_live.py tests/integration/test_sync_live.py
       - name: Migrations apply, match models, and roll back
         run: |
           uv run alembic upgrade head
