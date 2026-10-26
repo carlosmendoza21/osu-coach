@@ -10,6 +10,9 @@ docker compose up --build
 ```
 
 - API: http://localhost:8000 (docs at `/docs`, health at `/health`)
+- `GET /players/{username}`: a player's profile, top 50 plays by pp and latest 20 plays.
+  Synced from osu! through the worker when the stored copy is missing or older than
+  10 minutes; otherwise served straight from the database
 - Postgres 16 + pgvector on `5432`, Redis on `6379`
 - The `migrate` service runs `alembic upgrade head` before the API and worker start.
 
@@ -43,12 +46,13 @@ uv run pytest                  # unit tests (default)
 uv run pytest -m integration   # live tests: real Postgres, Redis and osu! API
 ```
 
-CI runs the unit tests and the Postgres tests (tables and sync) on every push.
+CI runs the unit tests and the Postgres tests (tables, sync and the players endpoint) on
+every push.
 
 On Windows, async database code needs a selector event loop (psycopg can't use the
 default one); `tests/conftest.py` sets it for the tests, and the worker task sets it too.
 
-**Unit tests** ([`tests/unit/`](tests/unit), 259 tests): call the code directly with nothing
+**Unit tests** ([`tests/unit/`](tests/unit), 277 tests): call the code directly with nothing
 running. `respx` fakes the osu! token endpoint (and blocks any unmocked request),
 `fakeredis` stands in for Redis, and the rate limiter gets a fake clock, so a 60 s window
 runs instantly.
@@ -134,7 +138,17 @@ statements are compiled to Postgres SQL:
   limits are passed on
 - If osu! fails at any of the three requests, nothing is written
 
-**Integration tests** ([`tests/integration/`](tests/integration), 48 tests): use real
+*`GET /players/{username}`* (18), with a fake sync, replaced queries and a fake session:
+- A fresh player is served without syncing; a stale or unknown one is synced, then
+  reloaded by the id the worker returned (`populate_existing`), so the response shows the
+  synced values; the username is passed on as typed
+- `404` when osu! doesn't know the player; with no stored data, `502` for an osu! error
+  and `504` for a timeout; with stale data, that data is served instead (graceful
+  degradation)
+- The response has exactly the public fields; the worker is waited on in a thread with a
+  30 s timeout
+
+**Integration tests** ([`tests/integration/`](tests/integration), 67 tests): use real
 Redis, real time, real processes, and the real osu! API with the credentials in `.env`.
 They skip with the reason if Redis isn't running (`docker compose up -d redis`) or the
 credentials are missing, and clean up their Redis keys even if a check fails.
@@ -184,6 +198,19 @@ migrated with Alembic exactly as deployment does, and dropped afterwards
   rolls back the player too
 - A real sync of peppy from osu! (needs Redis and credentials)
 
+*`GET /players/{username}`* (14, Postgres; also run in CI): the real queries, and the
+endpoint end to end with a sync that runs the real `sync_player` against a fake osu!
+- Lookup ignores letter case and prefers the most recently synced row for a reused name
+- Best: the top 50 by pp, highest first, without failed plays (Postgres sorts NULLs
+  first) or other players' scores; recent: the newest 20, failed plays included
+- A new player is synced and served; a repeat request (any letter case) is served from
+  the database; a stale player is resynced and the response shows the new values; an
+  unknown player is `404` and stores nothing
+
+*Whole app* (5, the full stack running): over real HTTP, `/health`; peppy's profile with 50
+best plays sorted by pp; a repeat request served without a new sync; `404` for an unknown
+player; the endpoint in the OpenAPI docs.
+
 *Worker* (3, the full stack running): `osu_sync` through the real Celery worker returns
 peppy's summary, repeated syncs don't duplicate rows, and an unknown player fails the task
 with `OsuNotFoundError`. It writes to the dev database, like the app.
@@ -210,6 +237,11 @@ Both suites were checked against deliberately broken code:
 - `sync.py`: not removing duplicates, not setting `updated_at`, committing part-way,
   writing before all data is fetched, scores before the player, updating only some
   columns, ignoring the limit, a wrong play time, or dropping recent scores
+- `api/players.py`: returning the method instead of calling it (`scalar_one_or_none`
+  without `()`), a case-sensitive lookup, failed plays in best, either list in the wrong
+  order, always or never resyncing, no `populate_existing`, no stale fallback, wrong
+  status codes, or a zero freshness window. Query bugs are caught by the Postgres tests
+  and endpoint logic by the unit tests, which is why CI runs both
 
 Each makes at least one test fail.
 
@@ -218,7 +250,7 @@ Each makes at least one test fail.
 ```
 src/osu_coach/
   main.py      FastAPI app
-  api/         routers (/health so far)
+  api/         routers: /health, /players/{username}
   osu/auth.py  osu! API token (client credentials), cached in Redis
   osu/ratelimiter.py  shared rate limit for osu! requests (sliding window in Redis)
   osu/retry.py        retries for temporary failures (backoff, jitter, Retry-After)
