@@ -390,3 +390,102 @@ async def test_errors_never_contain_secrets(env: Env, osu: OsuClient, status: in
     text = f"{exc.value!s} {exc.value!r}"
     assert TOKEN not in text
     assert SECRET not in text
+
+
+# ---------- Beatmaps ----------
+
+CHECKSUM = load("beatmap.json")["checksum"]
+
+
+async def test_get_beatmap(env: Env, osu: OsuClient) -> None:
+    route = env.api("/beatmaps/22423").mock(
+        return_value=httpx.Response(200, json=load("beatmap.json"))
+    )
+
+    beatmap = await osu.get_beatmap(22423)
+
+    assert (beatmap.id, beatmap.version, beatmap.max_combo) == (22423, "Hard", 450)
+    assert query(route) == {}
+    assert route.calls.last.request.headers["Authorization"] == f"Bearer {TOKEN}"
+
+
+async def test_get_beatmap_not_found(env: Env, osu: OsuClient) -> None:
+    env.api("/beatmaps/999999999").mock(
+        return_value=httpx.Response(404, json={"error": "beatmap couldn't be found."})
+    )
+
+    with pytest.raises(OsuNotFoundError):
+        await osu.get_beatmap(999999999)
+
+
+async def test_lookup_beatmap_sends_the_checksum_as_a_query_parameter(
+    env: Env, osu: OsuClient
+) -> None:
+    route = env.api("/beatmaps/lookup").mock(
+        return_value=httpx.Response(200, json=load("beatmap.json"))
+    )
+
+    beatmap = await osu.lookup_beatmap(CHECKSUM)
+
+    assert beatmap.id == 22423
+    # ?checksum=..., not /beatmaps/lookup/<checksum>: that URL doesn't exist on osu!,
+    # so every lookup would come back 404. (Unmocked URLs fail these tests outright.)
+    assert route.calls.last.request.url.path == "/api/v2/beatmaps/lookup"
+    assert query(route) == {"checksum": CHECKSUM}
+
+
+async def test_lookup_beatmap_lowercases_the_checksum(env: Env, osu: OsuClient) -> None:
+    route = env.api("/beatmaps/lookup").mock(
+        return_value=httpx.Response(200, json=load("beatmap.json"))
+    )
+
+    await osu.lookup_beatmap(CHECKSUM.upper())
+
+    # The same MD5 in either letter case; osu! uses lowercase.
+    assert query(route) == {"checksum": CHECKSUM}
+
+
+@pytest.mark.parametrize(
+    "checksum",
+    [
+        "not-a-hash",
+        "",
+        CHECKSUM[:31],  # one character short
+        CHECKSUM + "0",  # one character long
+        "g" * 32,  # right length, not hex
+        f" {CHECKSUM}",  # stray whitespace
+        CHECKSUM + "\n",  # a trailing newline must not slip through
+        "e13c28db-91ef-96be-62bd-503f0def5560",  # dashes, like a UUID
+    ],
+)
+async def test_bad_checksum_is_rejected_before_any_request(
+    env: Env, osu: OsuClient, checksum: str
+) -> None:
+    route = env.api("/beatmaps/lookup").mock(
+        return_value=httpx.Response(200, json=load("beatmap.json"))
+    )
+
+    with pytest.raises(ValueError) as exc:
+        await osu.lookup_beatmap(checksum)
+
+    assert repr(checksum.lower()) in str(exc.value), "the message shows what was rejected"
+    assert route.call_count == 0
+    assert env.token_route.call_count == 0, "no token fetch and no rate-limit slot either"
+    assert await env.redis.zcard(RATE_KEY) == 0
+
+
+async def test_lookup_beatmap_not_found(env: Env, osu: OsuClient) -> None:
+    env.api("/beatmaps/lookup").mock(return_value=httpx.Response(404, json={"error": None}))
+
+    with pytest.raises(OsuNotFoundError):
+        await osu.lookup_beatmap("0" * 32)  # well-formed, but no such map
+
+
+async def test_beatmap_requests_take_rate_limit_slots(env: Env, osu: OsuClient) -> None:
+    env.api("/beatmaps/22423").mock(return_value=httpx.Response(200, json=load("beatmap.json")))
+    env.api("/beatmaps/lookup").mock(return_value=httpx.Response(200, json=load("beatmap.json")))
+
+    await osu.get_beatmap(22423)
+    await osu.lookup_beatmap(CHECKSUM)
+
+    assert await env.redis.zcard(RATE_KEY) == 2

@@ -97,3 +97,16 @@ class OsuScore(OsuModel):
     statistics: ScoreStatistics
     beatmap: ScoreBeatmap
     beatmapset: ScoreBeatmapset
+
+
+# ---------- GET /beatmaps/{id} and /beatmaps/lookup ----------
+
+
+class OsuBeatmap(ScoreBeatmap):
+    """A full beatmap: everything a score's beatmap has, plus the fields below."""
+
+    max_combo: int | None  # osu! can send null for maps it hasn't processed
+    checksum: str | None  # MD5 of the .osu file; replays identify maps by it
+    status: str  # "ranked", "loved", "graveyard", ...
+    mode: str  # "osu" for standard, the only mode this app analyzes
+    beatmapset: ScoreBeatmapset  # artist, title, creator

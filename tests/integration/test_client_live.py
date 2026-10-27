@@ -19,6 +19,7 @@ from osu_coach.config import get_settings
 from osu_coach.osu.auth import CACHE_KEY, TokenProvider
 from osu_coach.osu.client import OsuClient, OsuNotFoundError
 from osu_coach.osu.ratelimiter import RateLimiter
+from tests.support import load
 
 pytestmark = pytest.mark.integration
 
@@ -127,3 +128,61 @@ async def test_every_request_takes_a_rate_limit_slot(live: Live) -> None:
     await live.osu.get_recent_scores(2, limit=5)
 
     assert await live.redis.zcard(live.rate_key) == live.api_requests() == 3
+
+
+# ---------- Beatmaps ----------
+
+
+async def test_get_beatmap_matches_the_saved_sample(live: Live) -> None:
+    saved = load("beatmap.json")
+
+    beatmap = await live.osu.get_beatmap(22423)
+
+    # Ranked maps don't change, so today's response should match the saved fixture.
+    assert (beatmap.version, beatmap.max_combo, beatmap.checksum) == (
+        saved["version"],
+        saved["max_combo"],
+        saved["checksum"],
+    )
+    assert (beatmap.od, beatmap.hp) == (saved["accuracy"], saved["drain"])
+
+
+async def test_lookup_finds_the_same_map_by_checksum(live: Live) -> None:
+    beatmap = await live.osu.get_beatmap(22423)
+    assert beatmap.checksum is not None
+
+    found = await live.osu.lookup_beatmap(beatmap.checksum)
+    found_upper = await live.osu.lookup_beatmap(beatmap.checksum.upper())
+
+    assert found.id == found_upper.id == 22423
+
+
+async def test_lookup_for_a_scores_map(live: Live) -> None:
+    # The replay flow: something hands us a checksum, and we need the map behind it.
+    score = (await live.osu.get_best_scores(2, limit=1))[0]
+    full = await live.osu.get_beatmap(score.beatmap.id)
+    assert full.checksum is not None
+
+    found = await live.osu.lookup_beatmap(full.checksum)
+
+    assert found.id == score.beatmap.id
+    assert (found.od, found.ar, found.cs) == (score.beatmap.od, score.beatmap.ar, score.beatmap.cs)
+
+
+@pytest.mark.parametrize(
+    ("method", "arg"),
+    [
+        ("get_beatmap", 999999999),
+        ("lookup_beatmap", "0" * 32),  # well-formed, but no such map
+    ],
+)
+async def test_unknown_beatmap_is_not_found(live: Live, method: str, arg: object) -> None:
+    with pytest.raises(OsuNotFoundError):
+        await getattr(live.osu, method)(arg)
+
+
+async def test_bad_checksum_never_reaches_osu(live: Live) -> None:
+    with pytest.raises(ValueError):
+        await live.osu.lookup_beatmap("not-a-hash")
+
+    assert live.api_requests() == 0

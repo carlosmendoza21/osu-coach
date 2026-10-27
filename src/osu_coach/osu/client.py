@@ -2,6 +2,7 @@
 
 import asyncio
 import random
+import re
 from collections.abc import Awaitable, Callable
 from typing import Any
 from urllib.parse import quote
@@ -12,7 +13,7 @@ from pydantic import TypeAdapter
 from osu_coach.osu.auth import TokenProvider
 from osu_coach.osu.ratelimiter import RateLimiter
 from osu_coach.osu.retry import DEFAULT_POLICY, RetryPolicy, send_with_retries
-from osu_coach.osu.schemas import OsuScore, OsuUser
+from osu_coach.osu.schemas import OsuBeatmap, OsuScore, OsuUser
 
 API_URL = "https://osu.ppy.sh/api/v2"
 MAX_SCORES = 100  # the API caps /scores/best and /scores/recent at 100
@@ -104,3 +105,19 @@ class OsuClient:
         params = {"mode": "osu", "limit": limit, **extra}
         response = await self._get(f"/users/{user_id}/scores/{kind}", params)
         return _SCORES.validate_json(response.content)
+
+    async def get_beatmap(self, beatmap_id: int) -> OsuBeatmap:
+        """A beatmap (one difficulty) by its id."""
+        response = await self._get(f"/beatmaps/{beatmap_id}")
+        return OsuBeatmap.model_validate_json(response.content)
+
+    async def lookup_beatmap(self, checksum: str) -> OsuBeatmap:
+        """A beatmap by the MD5 checksum of its .osu file (what a replay records)."""
+        # MD5 is the same hash in either letter case; osu! uses lowercase.
+        checksum = checksum.lower()
+        # Refuse bad input here, before it uses a rate-limit slot.
+        if not re.fullmatch(r"[0-9a-f]{32}", checksum):
+            raise ValueError(f"not an MD5 checksum (32 hex characters): {checksum!r}")
+        # The checksum is a query parameter (?checksum=...), not part of the path.
+        response = await self._get("/beatmaps/lookup", {"checksum": checksum})
+        return OsuBeatmap.model_validate_json(response.content)

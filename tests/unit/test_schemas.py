@@ -1,8 +1,8 @@
 """Unit tests for osu_coach.osu.schemas.
 
 The fixtures in tests/fixtures/osu/ are real osu! API v2 responses (public data), saved
-so these tests run offline: peppy's profile, three best scores (one with HD+DT), and a
-failed recent play. Edge cases are made by editing copies of them.
+so these tests run offline: peppy's profile, three best scores (one with HD+DT), a
+failed recent play, and one full beatmap. Edge cases are made by editing copies of them.
 tests/integration/test_schemas_live.py checks the models against today's live API.
 """
 
@@ -15,7 +15,7 @@ from typing import Any
 import pytest
 from pydantic import TypeAdapter, ValidationError
 
-from osu_coach.osu.schemas import OsuScore, OsuUser
+from osu_coach.osu.schemas import OsuBeatmap, OsuScore, OsuUser, ScoreBeatmap
 
 FIXTURES = Path(__file__).parent.parent / "fixtures" / "osu"
 SCORES = TypeAdapter(list[OsuScore])
@@ -286,3 +286,89 @@ def test_models_are_frozen(user_json: dict[str, Any], score_json: dict[str, Any]
         user.username = "someone-else"  # type: ignore[misc]
     with pytest.raises(ValidationError):
         score.statistics.count_miss = 0  # type: ignore[misc]
+
+
+# ---------- Beatmaps (GET /beatmaps/{id} and /beatmaps/lookup) ----------
+
+
+@pytest.fixture
+def beatmap_json() -> dict[str, Any]:
+    data: dict[str, Any] = load("beatmap.json")
+    return data
+
+
+def test_real_beatmap(beatmap_json: dict[str, Any]) -> None:
+    beatmap = OsuBeatmap.model_validate(beatmap_json)
+
+    assert (beatmap.id, beatmap.version) == (22423, "Hard")
+    assert beatmap.max_combo == beatmap_json["max_combo"]
+    assert beatmap.checksum == beatmap_json["checksum"]
+    assert (beatmap.status, beatmap.mode) == ("ranked", "osu")
+    assert beatmap.beatmapset.title == beatmap_json["beatmapset"]["title"]
+    assert beatmap.beatmapset.artist == beatmap_json["beatmapset"]["artist"]
+    assert beatmap.beatmapset.creator == beatmap_json["beatmapset"]["creator"]
+
+
+def test_beatmap_od_and_hp_are_inherited_aliases(beatmap_json: dict[str, Any]) -> None:
+    beatmap = OsuBeatmap.model_validate(beatmap_json)
+
+    # Inherited from ScoreBeatmap: osu!'s "accuracy" is OD and "drain" is HP.
+    assert isinstance(beatmap, ScoreBeatmap)
+    assert (beatmap.od, beatmap.hp) == (beatmap_json["accuracy"], beatmap_json["drain"])
+    assert (beatmap.ar, beatmap.cs, beatmap.bpm) == (
+        beatmap_json["ar"],
+        beatmap_json["cs"],
+        beatmap_json["bpm"],
+    )
+
+
+def test_beatmap_keeps_only_our_fields(beatmap_json: dict[str, Any]) -> None:
+    beatmap = OsuBeatmap.model_validate(beatmap_json)
+
+    dumped = beatmap.model_dump()
+    assert "failtimes" not in dumped and "playcount" not in dumped
+    assert set(dumped["beatmapset"]) == {"id", "artist", "title", "creator"}
+
+
+def test_beatmapset_is_a_mapset_not_a_difficulty(beatmap_json: dict[str, Any]) -> None:
+    # The mapset has no version, AR or OD of its own. Typing it as a difficulty
+    # (ScoreBeatmap) would demand those fields and reject every real beatmap.
+    for field in ("version", "ar", "accuracy", "difficulty_rating"):
+        assert field not in beatmap_json["beatmapset"]
+
+    OsuBeatmap.model_validate(beatmap_json)  # must not raise
+
+
+@pytest.mark.parametrize("field", ["max_combo", "checksum"])
+def test_beatmap_optional_values_can_be_null(beatmap_json: dict[str, Any], field: str) -> None:
+    beatmap = OsuBeatmap.model_validate(edit(beatmap_json, [field], None))
+
+    assert getattr(beatmap, field) is None
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        ["status"],
+        ["mode"],
+        ["beatmapset"],
+        ["beatmapset", "title"],
+        ["accuracy"],  # OD, from the inherited fields
+        ["max_combo"],  # may be null, but must be present
+    ],
+)
+def test_beatmap_missing_field_is_named(beatmap_json: dict[str, Any], path: list[str]) -> None:
+    with pytest.raises(ValidationError) as exc:
+        OsuBeatmap.model_validate(edit(beatmap_json, path))
+
+    assert (".".join(path), "missing") in error_at(exc)
+
+
+def test_a_scores_beatmap_is_not_a_full_beatmap(score_json: dict[str, Any]) -> None:
+    # A score only carries part of the map: no max_combo and no mapset inside it.
+    with pytest.raises(ValidationError) as exc:
+        OsuBeatmap.model_validate(score_json["beatmap"])
+
+    errors = error_at(exc)
+    assert ("max_combo", "missing") in errors
+    assert ("beatmapset", "missing") in errors
