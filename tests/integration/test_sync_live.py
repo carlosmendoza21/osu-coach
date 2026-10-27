@@ -24,9 +24,9 @@ from osu_coach.config import get_settings
 from osu_coach.osu.auth import TokenProvider
 from osu_coach.osu.client import OsuApiError, OsuClient
 from osu_coach.osu.ratelimiter import RateLimiter
-from osu_coach.osu.schemas import OsuScore
-from osu_coach.sync import SyncResult, sync_player
-from tests.support import FakeOsu, best_scores, failed_score
+from osu_coach.osu.schemas import OsuBeatmap, OsuScore
+from osu_coach.sync import SyncResult, beatmap_values, sync_player, upsert_beatmaps
+from tests.support import FakeOsu, best_scores, failed_score, load
 
 pytestmark = pytest.mark.integration
 
@@ -45,7 +45,7 @@ async def db(test_url: URL) -> AsyncIterator[AsyncEngine]:
 def empty_tables(engine: Engine) -> Iterator[None]:
     yield
     with engine.begin() as conn:  # each test starts from empty tables
-        conn.execute(text("TRUNCATE players, scores"))
+        conn.execute(text("TRUNCATE players, scores, beatmaps"))
 
 
 async def sync(db: AsyncEngine, osu: FakeOsu | OsuClient, who: int | str = 2) -> SyncResult:
@@ -61,6 +61,10 @@ async def query(db: AsyncEngine, sql: str) -> list[Any]:
 async def counts(db: AsyncEngine) -> tuple[int, int]:
     rows = await query(db, "SELECT (SELECT count(*) FROM players), (SELECT count(*) FROM scores)")
     return int(rows[0][0]), int(rows[0][1])
+
+
+async def map_count(db: AsyncEngine) -> int:
+    return int((await query(db, "SELECT count(*) FROM beatmaps"))[0][0])
 
 
 # ---------- Saving ----------
@@ -142,6 +146,7 @@ async def test_osu_failure_saves_nothing(db: AsyncEngine, failing: str) -> None:
         await sync(db, FakeOsu(fail=failing))
 
     assert await counts(db) == (0, 0)
+    assert await map_count(db) == 0
 
 
 async def test_database_failure_rolls_back_the_player_too(db: AsyncEngine) -> None:
@@ -153,6 +158,7 @@ async def test_database_failure_rolls_back_the_player_too(db: AsyncEngine) -> No
         await sync(db, FakeOsu(recent=[stray]))
 
     assert await counts(db) == (0, 0)
+    assert await map_count(db) == 0, "the maps written first are rolled back too"
 
 
 # ---------- Real osu! ----------
@@ -180,3 +186,98 @@ async def test_real_sync_from_osu(db: AsyncEngine) -> None:
     assert (result.osu_id, result.username) == (2, "peppy")
     assert 50 <= result.scores <= 100
     assert await counts(db) == (1, result.scores)
+    (row,) = await query(
+        db,
+        "SELECT (SELECT count(*) FROM beatmaps), (SELECT count(DISTINCT beatmap_id) FROM scores)",
+    )
+    assert row[0] == row[1], "every stored score's map is stored, once"
+
+
+# ---------- Beatmaps ----------
+
+
+async def test_sync_saves_the_scores_maps(db: AsyncEngine) -> None:
+    await sync(db, FakeOsu())
+
+    rows = await query(
+        db, "SELECT id, title, version, star_rating, od, checksum, max_combo FROM beatmaps"
+    )
+    want = {s.beatmap.id: s for s in best_scores()}
+    assert {r.id for r in rows} == set(want)
+    for r in rows:
+        score = want[r.id]
+        assert (r.title, r.version) == (score.beatmapset.title, score.beatmap.version)
+        assert (r.star_rating, r.od) == (score.beatmap.difficulty_rating, score.beatmap.od)
+        assert r.checksum == score.beatmap.checksum
+        assert r.max_combo is None, "a score's map data has no max combo"
+
+
+async def test_every_score_has_its_map(db: AsyncEngine) -> None:
+    best = best_scores()
+    failed = failed_score().model_copy(update={"user_id": 2})
+
+    await sync(db, FakeOsu(best=best, recent=[failed]))
+
+    orphans = await query(
+        db,
+        "SELECT count(*) FROM scores s LEFT JOIN beatmaps b ON b.id = s.beatmap_id "
+        "WHERE b.id IS NULL",
+    )
+    assert orphans[0][0] == 0
+    assert await map_count(db) == 3, "the failed play's map is stored too"
+
+
+async def test_a_map_played_several_times_is_stored_once(db: AsyncEngine) -> None:
+    best = best_scores()
+    retries = [
+        best[0].model_copy(update={"id": 9_000_000_000 + i, "passed": False, "pp": None})
+        for i in range(3)
+    ]
+
+    await sync(db, FakeOsu(best=best, recent=retries))
+
+    assert await map_count(db) == 2
+    assert (await counts(db))[1] == 5
+
+
+async def test_maps_are_idempotent_and_updated(db: AsyncEngine) -> None:
+    await sync(db, FakeOsu())
+    (before,) = await query(db, "SELECT updated_at FROM beatmaps ORDER BY id LIMIT 1")
+    score = best_scores()[0]
+    rerated = score.model_copy(
+        update={"beatmap": score.beatmap.model_copy(update={"difficulty_rating": 9.99})}
+    )
+    await asyncio.sleep(0.05)
+
+    await sync(db, FakeOsu(best=[rerated, best_scores()[1]]))
+
+    assert await map_count(db) == 2
+    (row,) = await query(db, f"SELECT star_rating FROM beatmaps WHERE id = {score.beatmap.id}")
+    assert row.star_rating == 9.99, "osu! re-rates maps; the new value wins"
+    (after,) = await query(db, "SELECT updated_at FROM beatmaps ORDER BY id LIMIT 1")
+    assert after.updated_at > before.updated_at
+
+
+async def test_a_known_max_combo_survives_a_sync(db: AsyncEngine) -> None:
+    # A full map fetch stored max_combo 450; a later sync only has the score's map data
+    # (no max combo). COALESCE keeps 450 instead of writing NULL over it.
+    full = OsuBeatmap.model_validate(load("beatmap.json"))
+    async with async_sessionmaker(db)() as session:
+        await upsert_beatmaps(session, [beatmap_values(full, full.beatmapset, full.max_combo)])
+        await session.commit()
+
+    await sync(db, FakeOsu())
+
+    (row,) = await query(db, f"SELECT max_combo FROM beatmaps WHERE id = {full.id}")
+    assert row.max_combo == 450
+
+
+async def test_a_new_max_combo_replaces_an_old_one(db: AsyncEngine) -> None:
+    full = OsuBeatmap.model_validate(load("beatmap.json"))
+    async with async_sessionmaker(db)() as session:
+        await upsert_beatmaps(session, [beatmap_values(full, full.beatmapset, 400)])
+        await upsert_beatmaps(session, [beatmap_values(full, full.beatmapset, 450)])
+        await session.commit()
+
+    (row,) = await query(db, f"SELECT max_combo FROM beatmaps WHERE id = {full.id}")
+    assert row.max_combo == 450, "COALESCE only keeps the old value when the new one is NULL"

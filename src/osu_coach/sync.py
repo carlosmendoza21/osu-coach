@@ -7,9 +7,9 @@ from sqlalchemy import func
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from osu_coach.models import Player, Score
+from osu_coach.models import Beatmap, Player, Score
 from osu_coach.osu.client import OsuClient
-from osu_coach.osu.schemas import OsuScore, OsuUser
+from osu_coach.osu.schemas import OsuScore, OsuUser, ScoreBeatmap, ScoreBeatmapset
 
 
 @dataclass(frozen=True)
@@ -53,6 +53,36 @@ def score_values(score: OsuScore) -> dict[str, Any]:
     }
 
 
+def beatmap_values(
+    beatmap: ScoreBeatmap, beatmapset: ScoreBeatmapset, max_combo: int | None = None
+) -> dict[str, Any]:
+    """The beatmaps row for a map (updated_at is set by the database)."""
+
+    return {
+        "id": beatmap.id,
+        "beatmapset_id": beatmap.beatmapset_id,
+        "artist": beatmapset.artist,
+        "title": beatmapset.title,
+        "creator": beatmapset.creator,
+        "version": beatmap.version,
+        "star_rating": beatmap.difficulty_rating,
+        "ar": beatmap.ar,
+        "od": beatmap.od,
+        "cs": beatmap.cs,
+        "hp": beatmap.hp,
+        "bpm": beatmap.bpm,
+        "length_s": beatmap.total_length,
+        "hit_length_s": beatmap.hit_length,
+        "count_circles": beatmap.count_circles,
+        "count_sliders": beatmap.count_sliders,
+        "count_spinners": beatmap.count_spinners,
+        "max_combo": max_combo,
+        "checksum": beatmap.checksum,
+        "status": beatmap.status,
+        "mode": beatmap.mode,
+    }
+
+
 async def upsert_player(session: AsyncSession, user: OsuUser) -> None:
     """Insert the player, or update every column if they already exist."""
     values = player_values(user)
@@ -86,6 +116,28 @@ async def upsert_scores(session: AsyncSession, scores: list[OsuScore]) -> int:
     return len(unique)
 
 
+async def upsert_beatmaps(session: AsyncSession, rows: list[dict[str, Any]]) -> int:
+    """Insert or update maps in one statement. Returns how many distinct maps there were."""
+    # Several scores can be on the same map, and Postgres refuses to update the same row
+    # twice in one INSERT ... ON CONFLICT, so keep one row per map.
+    unique = list({row["id"]: row for row in rows}.values())
+    if not unique:
+        return 0
+    stmt = insert(Beatmap).values(unique)
+    stmt = stmt.on_conflict_do_update(
+        index_elements=[Beatmap.id],
+        set_={
+            **{column: stmt.excluded[column] for column in unique[0] if column != "id"},
+            # A score's map data has no max combo. Keep a known value instead of writing
+            # NULL over it: the new value if there is one, otherwise the stored one.
+            "max_combo": func.coalesce(stmt.excluded.max_combo, Beatmap.max_combo),
+            "updated_at": func.now(),
+        },
+    )
+    await session.execute(stmt)
+    return len(unique)
+
+
 async def sync_player(
     osu: OsuClient,
     session: AsyncSession,
@@ -100,9 +152,12 @@ async def sync_player(
     best = await osu.get_best_scores(profile.id, best_limit)
     recent = await osu.get_recent_scores(profile.id, recent_limit)
 
-    # The player first: scores reference them through the foreign key.
+    scores = [*best, *recent]
+    # Maps and the player first: scores reference both through foreign keys. The maps
+    # come from the scores' own data, so this needs no extra requests to osu!.
+    await upsert_beatmaps(session, [beatmap_values(s.beatmap, s.beatmapset) for s in scores])
     await upsert_player(session, profile)
-    saved = await upsert_scores(session, [*best, *recent])
-    await session.commit()  # all or nothing
+    saved = await upsert_scores(session, scores)
+    await session.commit()  # all or nothing, maps included
 
     return SyncResult(osu_id=profile.id, username=profile.username, scores=saved)

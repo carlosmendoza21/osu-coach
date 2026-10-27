@@ -15,6 +15,7 @@ from typing import Any, cast
 import httpx
 import pytest
 from sqlalchemy import Engine, insert, text
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import URL
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
@@ -27,14 +28,15 @@ from sqlalchemy.pool import NullPool
 from osu_coach.api import players
 from osu_coach.db import get_session
 from osu_coach.main import create_app
-from osu_coach.models import Player, Score
+from osu_coach.models import Beatmap, Player, Score
 from osu_coach.osu.client import OsuClient, OsuNotFoundError
-from osu_coach.sync import player_values, score_values, sync_player
+from osu_coach.sync import beatmap_values, player_values, score_values, sync_player
 from tests.support import FakeOsu, best_scores, failed_score, user
 
 pytestmark = pytest.mark.integration
 
 BASE_SCORE = score_values(best_scores()[0])
+BASE_MAP = beatmap_values(best_scores()[0].beatmap, best_scores()[0].beatmapset)
 T0 = datetime(2026, 1, 1, tzinfo=UTC)
 
 
@@ -52,7 +54,7 @@ async def db(test_url: URL) -> AsyncIterator[AsyncEngine]:
 def empty_tables(engine: Engine) -> Iterator[None]:
     yield
     with engine.begin() as conn:  # each test starts from empty tables
-        conn.execute(text("TRUNCATE players, scores"))
+        conn.execute(text("TRUNCATE players, scores, beatmaps"))
 
 
 @pytest.fixture
@@ -68,8 +70,11 @@ async def add_player(db: AsyncEngine, osu_id: int = 2, **changes: Any) -> None:
 
 
 async def add_scores(db: AsyncEngine, rows: list[dict[str, Any]]) -> None:
+    rows = [{**BASE_SCORE, **row} for row in rows]
     async with db.begin() as conn:
-        await conn.execute(insert(Score).values([{**BASE_SCORE, **row} for row in rows]))
+        # Scores need their map stored first (foreign key); these all use BASE_SCORE's.
+        await conn.execute(pg_insert(Beatmap).values(**BASE_MAP).on_conflict_do_nothing())
+        await conn.execute(insert(Score).values(rows))
 
 
 class SyncIntoTestDb:

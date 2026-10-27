@@ -13,12 +13,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from osu_coach.models import Base
 from osu_coach.osu.client import OsuApiError, OsuClient, OsuNotFoundError
-from osu_coach.osu.schemas import OsuScore, OsuUser
+from osu_coach.osu.schemas import OsuBeatmap, OsuScore, OsuUser
 from osu_coach.sync import (
     SyncResult,
+    beatmap_values,
     player_values,
     score_values,
     sync_player,
+    upsert_beatmaps,
     upsert_player,
     upsert_scores,
 )
@@ -26,6 +28,7 @@ from tests.support import FakeOsu, best_scores, failed_score, load, user
 
 PLAYER_COLUMNS = {c.name for c in Base.metadata.tables["players"].columns}
 SCORE_COLUMNS = {c.name for c in Base.metadata.tables["scores"].columns}
+BEATMAP_COLUMNS = {c.name for c in Base.metadata.tables["beatmaps"].columns}
 PG = postgresql.dialect()  # type: ignore[no-untyped-call]  # SQLAlchemy leaves it untyped
 
 
@@ -189,13 +192,18 @@ async def test_no_scores_means_no_statement() -> None:
 # ---------- sync_player ----------
 
 
-async def test_sync_order_player_scores_commit() -> None:
+async def test_sync_order_maps_player_scores_commit() -> None:
     session = FakeSession()
 
     result = await run_sync(FakeOsu(), session)
 
-    # The player first (scores reference it), then the scores, then one commit.
-    assert session.events == ["execute players", "execute scores", "commit"]
+    # Maps and the player first (scores reference both), then the scores, one commit.
+    assert session.events == [
+        "execute beatmaps",
+        "execute players",
+        "execute scores",
+        "commit",
+    ]
     assert result == SyncResult(osu_id=2, username="peppy", scores=2)
 
 
@@ -261,3 +269,133 @@ async def test_unknown_player_writes_nothing() -> None:
         await run_sync(Missing(), session, "nobody")
 
     assert session.events == []
+
+
+# ---------- Beatmaps ----------
+
+
+def full_beatmap() -> OsuBeatmap:
+    return OsuBeatmap.model_validate(load("beatmap.json"))
+
+
+def test_beatmap_values_from_a_score() -> None:
+    raw = load("scores_best.json")[0]
+    score = OsuScore.model_validate(raw)
+
+    values = beatmap_values(score.beatmap, score.beatmapset)
+
+    b, mapset = raw["beatmap"], raw["beatmapset"]
+    assert values == {
+        "id": b["id"],
+        "beatmapset_id": b["beatmapset_id"],
+        "artist": mapset["artist"],
+        "title": mapset["title"],
+        "creator": mapset["creator"],
+        "version": b["version"],
+        "star_rating": b["difficulty_rating"],
+        "ar": b["ar"],
+        "od": b["accuracy"],  # osu!'s name for OD
+        "cs": b["cs"],
+        "hp": b["drain"],  # osu!'s name for HP
+        "bpm": b["bpm"],
+        "length_s": b["total_length"],
+        "hit_length_s": b["hit_length"],
+        "count_circles": b["count_circles"],
+        "count_sliders": b["count_sliders"],
+        "count_spinners": b["count_spinners"],
+        "max_combo": None,  # a score's map data doesn't have it
+        "checksum": b["checksum"],
+        "status": b["status"],
+        "mode": b["mode"],
+    }
+
+
+def test_beatmap_values_from_a_full_map() -> None:
+    beatmap = full_beatmap()
+
+    values = beatmap_values(beatmap, beatmap.beatmapset, beatmap.max_combo)
+
+    assert values["max_combo"] == 450
+    assert (values["title"], values["version"]) == (beatmap.beatmapset.title, "Hard")
+
+
+def test_a_score_and_a_full_map_give_the_same_row_but_max_combo() -> None:
+    # Both shapes describe the same map; only the max combo is extra in the full one.
+    score = OsuScore.model_validate(load("scores_best.json")[0])
+    beatmap = full_beatmap()
+    assert score.beatmap.id == beatmap.id
+
+    from_score = beatmap_values(score.beatmap, score.beatmapset)
+    from_full = beatmap_values(beatmap, beatmap.beatmapset, beatmap.max_combo)
+
+    assert {k: v for k, v in from_score.items() if k != "max_combo"} == {
+        k: v for k, v in from_full.items() if k != "max_combo"
+    }
+
+
+def test_beatmap_values_cover_every_column_but_updated_at() -> None:
+    score = best_scores()[0]
+
+    assert set(beatmap_values(score.beatmap, score.beatmapset)) == BEATMAP_COLUMNS - {"updated_at"}
+
+
+def map_rows(scores: list[OsuScore]) -> list[dict[str, Any]]:
+    return [beatmap_values(s.beatmap, s.beatmapset) for s in scores]
+
+
+async def test_upsert_beatmaps_sql() -> None:
+    session = FakeSession()
+
+    await upsert_beatmaps(cast(AsyncSession, session), map_rows(best_scores()))
+
+    sql = session.sql(0)
+    assert sql.startswith("INSERT INTO beatmaps")
+    assert "ON CONFLICT (id) DO UPDATE SET" in sql
+    updated = sql.split("DO UPDATE SET", 1)[1]
+    for column in BEATMAP_COLUMNS - {"id", "max_combo", "updated_at"}:
+        assert f"{column} = excluded.{column}" in updated, column
+    # A score's map has no max combo: keep a stored one instead of writing NULL over it.
+    assert "max_combo = coalesce(excluded.max_combo, beatmaps.max_combo)" in updated
+    assert "updated_at = now()" in updated
+    assert " id =" not in updated
+
+
+async def test_upsert_beatmaps_is_one_statement() -> None:
+    session = FakeSession()
+    rows = map_rows([*best_scores(), failed_score()])
+
+    saved = await upsert_beatmaps(cast(AsyncSession, session), rows)
+
+    assert saved == 3
+    assert len(session.statements) == 1
+    assert session.row_count(0) == 3
+
+
+async def test_maps_played_more_than_once_are_saved_once() -> None:
+    # Retrying a map gives several recent scores on it; Postgres refuses to update the
+    # same row twice in one INSERT ... ON CONFLICT.
+    session = FakeSession()
+    rows = map_rows([best_scores()[0]] * 4 + [best_scores()[1]])
+
+    saved = await upsert_beatmaps(cast(AsyncSession, session), rows)
+
+    assert saved == 2
+    assert session.row_count(0) == 2
+
+
+async def test_no_maps_means_no_statement() -> None:
+    session = FakeSession()
+
+    assert await upsert_beatmaps(cast(AsyncSession, session), []) == 0
+    assert session.statements == []
+
+
+async def test_sync_saves_the_maps_of_best_and_recent() -> None:
+    session = FakeSession()
+    best = best_scores()
+
+    await run_sync(FakeOsu(best=best, recent=[best[0], failed_score()]), session)
+
+    # Three distinct maps: best[0]'s map appears twice and is saved once.
+    assert session.events[0] == "execute beatmaps"
+    assert session.row_count(0) == 3

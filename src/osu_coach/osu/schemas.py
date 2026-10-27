@@ -70,6 +70,9 @@ class ScoreBeatmap(OsuModel):
     # osu! calls OD "accuracy" and HP "drain" on beatmaps; use the real names here.
     od: float = Field(alias="accuracy")
     hp: float = Field(alias="drain")
+    checksum: str | None  # MD5 of the .osu file; replays identify maps by it
+    status: str  # "ranked", "loved", "graveyard", ...
+    mode: str  # "osu" for standard, the only mode this app analyzes
 
 
 class ScoreBeatmapset(OsuModel):
@@ -103,10 +106,7 @@ class OsuScore(OsuModel):
 
 
 class OsuBeatmap(ScoreBeatmap):
-    """A full beatmap: everything a score's beatmap has, plus the fields below."""
+    """A full beatmap: everything a score's beatmap has, plus the two fields below."""
 
     max_combo: int | None  # osu! can send null for maps it hasn't processed
-    checksum: str | None  # MD5 of the .osu file; replays identify maps by it
-    status: str  # "ranked", "loved", "graveyard", ...
-    mode: str  # "osu" for standard, the only mode this app analyzes
     beatmapset: ScoreBeatmapset  # artist, title, creator
