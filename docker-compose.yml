@@ -40,6 +40,7 @@ services:
     build: .
     environment: *app-env
     ports: ["8000:8000"]
+    volumes: [appdata:/app/data]  # .osu files and replay frames, shared with the worker
     depends_on:
       migrate: { condition: service_completed_successfully }
       redis: { condition: service_healthy }
@@ -52,6 +53,7 @@ services:
   worker:
     build: .
     command: ["celery", "-A", "osu_coach.worker", "worker", "--loglevel=info", "--concurrency=2"]
+    volumes: [appdata:/app/data]
     environment: *app-env
     depends_on:
       migrate: { condition: service_completed_successfully }
@@ -59,3 +61,4 @@ services:
 
 volumes:
   pgdata:
+  appdata:

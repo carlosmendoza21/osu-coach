@@ -1,1 +1,6 @@
 * text=auto eol=lf
+
+# osu! files are identified by the MD5 of their exact bytes, and real maps use \r\n or \n
+# line endings. Store them untouched, or git's line-ending conversion changes the MD5.
+*.osu -text
+*.osr binary
