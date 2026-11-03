@@ -7,6 +7,8 @@ Note: the worker writes to the dev database, like the real app. Syncing is idemp
 so running this again changes nothing but the synced player's latest values.
 """
 
+import time
+
 import pytest
 from sqlalchemy import create_engine, text
 
@@ -75,3 +77,31 @@ def test_fetch_beatmap_refuses_other_modes() -> None:
         task.get(timeout=TIMEOUT_S)
 
     assert task.state == "FAILURE"
+
+
+def test_sync_fetches_the_players_missing_maps() -> None:
+    # Remove map 22423's objects (peppy's top play) in the dev database, then sync peppy:
+    # the sync must queue a fetch for it, and the worker must store its objects again.
+    engine = create_engine(get_settings().database_url)
+    count = text("SELECT count(*) FROM hit_objects WHERE beatmap_id = 22423")
+    try:
+        osu_sync.delay(2).get(timeout=TIMEOUT_S)  # make sure peppy and the map are stored
+        with engine.begin() as conn:
+            conn.execute(text("DELETE FROM hit_objects WHERE beatmap_id = 22423"))
+
+        result = osu_sync.delay(2).get(timeout=TIMEOUT_S)
+
+        assert result["maps_queued"] >= 1
+        deadline = time.monotonic() + TIMEOUT_S
+        while time.monotonic() < deadline:
+            with engine.connect() as conn:
+                if conn.execute(count).scalar() == 254:
+                    break
+            time.sleep(1)
+        with engine.connect() as conn:
+            assert conn.execute(count).scalar() == 254, "the queued fetch never stored the map"
+
+        again = osu_sync.delay(2).get(timeout=TIMEOUT_S)
+        assert again["maps_queued"] == 0, "maps already stored aren't fetched again"
+    finally:
+        engine.dispose()

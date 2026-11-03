@@ -2,10 +2,10 @@
 
 from dataclasses import asdict, dataclass
 
-from sqlalchemy import delete, insert
+from sqlalchemy import delete, exists, insert, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from osu_coach.models import BeatmapObject
+from osu_coach.models import Beatmap, BeatmapObject, Score
 from osu_coach.osu.client import OsuClient
 from osu_coach.osu.files import BeatmapFiles
 from osu_coach.osufile import parse_osu
@@ -76,3 +76,16 @@ async def fetch_beatmap(
     await session.commit()  # all or nothing: the map and its objects together
 
     return FetchResult(beatmap_id=beatmap.id, version=beatmap.version, objects=len(features))
+
+
+async def maps_to_fetch(session: AsyncSession, osu_id: int) -> list[int]:
+    """The player's osu! standard maps that have no hit objects stored yet, by id."""
+    has_objects = exists().where(BeatmapObject.beatmap_id == Beatmap.id)
+    stmt = (
+        select(Beatmap.id)
+        .join(Score, Score.beatmap_id == Beatmap.id)
+        .where(Score.player_id == osu_id, Beatmap.mode == "osu", ~has_objects)
+        .distinct()
+        .order_by(Beatmap.id)
+    )
+    return list((await session.scalars(stmt)).all())

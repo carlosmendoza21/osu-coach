@@ -21,7 +21,13 @@ from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async
 from sqlalchemy.pool import NullPool
 
 from osu_coach import beatmaps
-from osu_coach.beatmaps import BeatmapMismatchError, FetchResult, fetch_beatmap, store_hit_objects
+from osu_coach.beatmaps import (
+    BeatmapMismatchError,
+    FetchResult,
+    fetch_beatmap,
+    maps_to_fetch,
+    store_hit_objects,
+)
 from osu_coach.config import get_settings
 from osu_coach.osu.auth import TokenProvider
 from osu_coach.osu.client import OsuClient
@@ -179,3 +185,86 @@ async def test_real_fetch(db: AsyncEngine, engine: Engine, tmp_path: Path) -> No
 
     assert result == FetchResult(beatmap_id=22423, version="Hard", objects=254)
     assert counts(engine) == (1, 254)
+
+
+# ---------- maps_to_fetch ----------
+
+
+def add_rows(engine: Engine) -> None:
+    """Two players, five maps, and scores on them. Map 1 already has its hit objects."""
+    player = (
+        "INSERT INTO players (osu_id, username, country, pp, playcount, accuracy) "
+        "VALUES (:id, :name, 'XX', 1, 1, 99)"
+    )
+    map_row = (
+        "INSERT INTO beatmaps (id, beatmapset_id, artist, title, creator, version, "
+        "star_rating, ar, od, cs, hp, bpm, length_s, hit_length_s, count_circles, "
+        "count_sliders, count_spinners, status, mode) "
+        "VALUES (:id, 1, 'a', 't', 'c', 'v', 5, 9, 8, 4, 5, 180, 90, 80, 1, 0, 0, 'ranked', :mode)"
+    )
+    score = (
+        "INSERT INTO scores (id, player_id, beatmap_id, score, max_combo, count_300, "
+        "count_100, count_50, count_miss, rank, pp, mods, date, accuracy, passed) "
+        "VALUES (:id, :player, :map, 1, 1, 1, 0, 0, 0, 'X', 10, '{}', now(), 1, true)"
+    )
+    with engine.begin() as conn:
+        conn.execute(text(player), [{"id": 2, "name": "peppy"}, {"id": 3, "name": "other"}])
+        conn.execute(
+            text(map_row),
+            [
+                {"id": 1, "mode": "osu"},  # has objects already
+                {"id": 2, "mode": "osu"},  # needs fetching
+                {"id": 3, "mode": "osu"},  # needs fetching; played twice
+                {"id": 4, "mode": "taiko"},  # another game mode: never fetched
+                {"id": 5, "mode": "osu"},  # only the other player's
+            ],
+        )
+        conn.execute(
+            text(score),
+            [
+                {"id": 10, "player": 2, "map": 1},
+                {"id": 11, "player": 2, "map": 3},
+                {"id": 12, "player": 2, "map": 2},
+                {"id": 13, "player": 2, "map": 3},  # a second score on map 3
+                {"id": 14, "player": 2, "map": 4},
+                {"id": 15, "player": 3, "map": 5},
+            ],
+        )
+        conn.execute(
+            text(
+                "INSERT INTO hit_objects (beatmap_id, idx, kind, time_ms, end_time_ms, x, y, "
+                "pattern) VALUES (1, 0, 'circle', 0, 0, 256, 192, 'other')"
+            )
+        )
+
+
+async def test_maps_to_fetch(db: AsyncEngine, engine: Engine) -> None:
+    add_rows(engine)
+
+    async with async_sessionmaker(db)() as session:
+        to_fetch = await maps_to_fetch(session, 2)
+
+    # Map 1 has objects, map 4 is taiko, map 5 is someone else's; map 3 is listed once.
+    assert to_fetch == [2, 3]
+
+
+async def test_maps_to_fetch_for_another_player(db: AsyncEngine, engine: Engine) -> None:
+    add_rows(engine)
+
+    async with async_sessionmaker(db)() as session:
+        assert await maps_to_fetch(session, 3) == [5]
+        assert await maps_to_fetch(session, 999) == [], "unknown player: nothing to fetch"
+
+
+async def test_a_fetched_map_drops_off_the_list(db: AsyncEngine, engine: Engine) -> None:
+    add_rows(engine)
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                "INSERT INTO hit_objects (beatmap_id, idx, kind, time_ms, end_time_ms, x, y, "
+                "pattern) VALUES (2, 0, 'circle', 0, 0, 256, 192, 'other')"
+            )
+        )
+
+    async with async_sessionmaker(db)() as session:
+        assert await maps_to_fetch(session, 2) == [3]

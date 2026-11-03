@@ -116,6 +116,27 @@ async def test_ttl_is_expires_in_minus_margin(
     assert ttl == want, f"expires_in={expires_in}: TTL {ttl}, expected {want}"
 
 
+@pytest.mark.parametrize(
+    "expires_in",
+    [
+        EXPIRY_MARGIN,  # the expiry would be 0
+        30,  # or negative
+        0,
+    ],
+)
+async def test_a_short_lived_token_is_used_but_not_cached(
+    provider: TokenProvider, redis: FakeAsyncRedis, osu: respx.MockRouter, expires_in: int
+) -> None:
+    # Redis rejects an expiry of 0 or less; caching such a token used to crash.
+    route = osu.post(TOKEN_URL).mock(return_value=token_reply(expires_in=expires_in))
+
+    assert await provider.get_token() == TOKEN
+    assert await redis.get(CACHE_KEY) is None
+
+    await provider.get_token()
+    assert route.call_count == 2, "not cached, so the next call fetches a new one"
+
+
 async def test_expired_cache_entry_triggers_new_fetch(
     provider: TokenProvider, redis: FakeAsyncRedis, osu: respx.MockRouter
 ) -> None:

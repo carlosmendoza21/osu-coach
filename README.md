@@ -53,7 +53,7 @@ every push.
 On Windows, async database code needs a selector event loop (psycopg can't use the
 default one); `tests/conftest.py` sets it for the tests, and the worker task sets it too.
 
-**Unit tests** ([`tests/unit/`](tests/unit), 519 tests): call the code directly with nothing
+**Unit tests** ([`tests/unit/`](tests/unit), 524 tests): call the code directly with nothing
 running. `respx` fakes the osu! token endpoint (and blocks any unmocked request),
 `fakeredis` stands in for Redis, and the rate limiter gets a fake clock, so a 60 s window
 runs instantly.
@@ -61,7 +61,8 @@ runs instantly.
 *osu! token* (22):
 - `get_token` cache: a cache hit makes no osu! request, a miss fetches and stores, a second
   call reuses the token, the TTL is `expires_in` minus a 60 s margin, and an expired entry
-  triggers a new fetch
+  triggers a new fetch; a token living 60 s or less is used but not cached (Redis rejects
+  an expiry of 0 or less)
 - Token request: sent as a client-credentials form with the real secret, not the
   `SecretStr` mask
 - Errors: `400`/`401` raise `OsuAuthError`; `403`, `429` and `5xx` stay HTTP errors, so an
@@ -153,6 +154,9 @@ endings, one with `\n`):
 - Anything broken raises `OsuFileError` naming the line: a file that isn't `.osu`, a
   missing or non-numeric difficulty value, bad timing points, bad or unknown hit objects
 
+*Worker tasks* (2): the tasks' names, and the errors declared as expected (`throws=`), so
+Celery logs a missing player or a taiko map in one line instead of a traceback.
+
 *Fetching a map* (16), with a fake client, file store and session:
 - One map is fetched, its file is asked for with osu!'s checksum, and the writes go map
   row (with its max combo) -> old objects deleted -> new objects inserted -> one commit;
@@ -207,7 +211,7 @@ statements are compiled to Postgres SQL:
 - The response has exactly the public fields; the worker is waited on in a thread with a
   30 s timeout
 
-**Integration tests** ([`tests/integration/`](tests/integration), 115 tests): use real
+**Integration tests** ([`tests/integration/`](tests/integration), 119 tests): use real
 Redis, real time, real processes, and the real osu! API with the credentials in `.env`.
 They skip with the reason if Redis isn't running (`docker compose up -d redis`) or the
 credentials are missing, and clean up their Redis keys even if a check fails.
@@ -297,18 +301,20 @@ into the next note on any of them, and both streams and jumps are found.
 In Postgres, map 22423's 254 objects round-trip with their features, need their map,
 are deleted with it, and can't share a position.
 
-*Fetching a map* (7, Postgres; also run in CI): the map and its 254 objects are stored;
+*Fetching a map* (10, Postgres; also run in CI): the map and its 254 objects are stored;
 fetching again gives the same rows; objects from an older, bigger version of the map are
 removed; other maps' objects are left alone; a mismatch stores nothing; a failure while
 storing the objects rolls the map back too; and a real fetch from osu! (needs Redis and
-credentials).
+credentials). `maps_to_fetch` lists a player's osu! standard maps without hit objects:
+not maps already fetched, other modes or other players' maps, and each map once.
 
 *Whole app* (5, the full stack running): over real HTTP, `/health`; peppy's profile with 50
 best plays sorted by pp; a repeat request served without a new sync; `404` for an unknown
 player; the endpoint in the OpenAPI docs.
 
-*Worker* (5, the full stack running): `fetch_beatmap` stores map 22423's 254 objects and
-refuses a taiko map. `osu_sync` through the real Celery worker returns
+*Worker* (6, the full stack running): `fetch_beatmap` stores map 22423's 254 objects and
+refuses a taiko map. A sync queues `fetch_beatmap` for the player's maps without objects
+(a removed map is fetched back with all 254 objects), and a second sync queues none. `osu_sync` through the real Celery worker returns
 peppy's summary, repeated syncs don't duplicate rows, and an unknown player fails the task
 with `OsuNotFoundError`. It writes to the dev database, like the app.
 
@@ -362,6 +368,8 @@ Both suites were checked against deliberately broken code:
   fetching the file without its checksum, dropping the max combo, not deleting old
   objects, deleting every map's objects, never committing, or storing objects before
   their map
+- `maps_to_fetch` listing other modes, maps that already have objects, every player's maps,
+  or a map twice; caching tokens that live 60 s or less; tasks without `throws=`
 
 `.gitattributes` marks `.osu` files as binary: git's `\r\n` to `\n` conversion would change
 a map file's MD5 and break the fixtures on other machines.

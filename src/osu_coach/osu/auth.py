@@ -41,14 +41,12 @@ class TokenProvider:
         # for now (about once a day, and extra tokens are harmless).
         token_data = await self._fetch_token()
 
-        # Cache the token in Redis with an expiry time.
-        # TODO: if expires_in <= EXPIRY_MARGIN, ex is 0 or negative and Redis rejects the
-        # set. osu! always sends 86400 today; skip caching in that case when we fix it.
-        await self.redis_client.set(
-            CACHE_KEY,
-            token_data.access_token,
-            ex=token_data.expires_in - EXPIRY_MARGIN,
-        )
+        # Cache the token, expiring a little before osu! says it does. A token that lives
+        # no longer than that margin isn't cached at all: the expiry would be 0 or negative,
+        # which Redis rejects. (osu! sends 86400 s today, so this is only a safeguard.)
+        cache_s = token_data.expires_in - EXPIRY_MARGIN
+        if cache_s > 0:
+            await self.redis_client.set(CACHE_KEY, token_data.access_token, ex=cache_s)
 
         return token_data.access_token
 
