@@ -17,10 +17,12 @@ from sqlalchemy.engine import URL
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from osu_coach.models import Beatmap, Player, Score
+from osu_coach.models import Beatmap, BeatmapObject, Player, Score
 from osu_coach.osu.schemas import OsuScore, OsuUser
+from osu_coach.osufile import parse_osu
+from osu_coach.patterns import object_features
 from osu_coach.sync import beatmap_values, player_values, score_values
-from tests.support import ROOT, alembic, load
+from tests.support import FIXTURES, ROOT, alembic, load
 
 pytestmark = pytest.mark.integration
 
@@ -33,7 +35,7 @@ def session(engine: Engine) -> Iterator[Session]:
         yield s
         s.rollback()
     with engine.begin() as conn:  # each test starts from empty tables
-        conn.execute(text("TRUNCATE players, scores, beatmaps"))
+        conn.execute(text("TRUNCATE players, scores, beatmaps, hit_objects"))
 
 
 # The rows come from the same mapping the sync uses, so these tests cover it too.
@@ -92,6 +94,7 @@ def test_migration_can_be_undone_and_redone(test_url: URL, engine: Engine) -> No
         ("players", {"global_rank"}),
         ("scores", {"pp"}),
         ("beatmaps", {"max_combo", "checksum"}),
+        ("hit_objects", {"spacing", "angle", "time_since_prev_ms"}),
     ],
 )
 def test_nullable_columns_in_postgres(engine: Engine, table: str, nullable: set[str]) -> None:
@@ -132,7 +135,8 @@ def test_constraint_names_match_the_convention(engine: Engine) -> None:
             conn.execute(
                 text(
                     "SELECT conname FROM pg_constraint WHERE conrelid IN "
-                    "('players'::regclass, 'scores'::regclass, 'beatmaps'::regclass)"
+                    "('players'::regclass, 'scores'::regclass, 'beatmaps'::regclass, "
+                    "'hit_objects'::regclass)"
                 )
             ).scalars()
         )
@@ -144,6 +148,8 @@ def test_constraint_names_match_the_convention(engine: Engine) -> None:
         "scores_beatmap_id_fkey",
         "beatmaps_pkey",
         "beatmaps_checksum_key",
+        "hit_objects_pkey",
+        "hit_objects_beatmap_id_fkey",
     }
 
 
@@ -292,3 +298,65 @@ def test_best_scores_query_uses_the_index(session: Session) -> None:
 
     assert "ix_scores_player_pp" in plan, plan
     assert "Sort" not in plan, f"the index should already give pp order:\n{plan}"
+
+
+# ---------- hit_objects ----------
+
+
+def map_22423_objects() -> list[BeatmapObject]:
+    features = object_features(parse_osu((FIXTURES / "22423.osu").read_text(encoding="utf-8")))
+    return [BeatmapObject(beatmap_id=22423, **vars(f)) for f in features]
+
+
+def test_hit_objects_round_trip(session: Session) -> None:
+    session.add(map_row(OsuScore.model_validate(load("scores_best.json")[0])))  # map 22423
+    session.flush()
+    session.add_all(map_22423_objects())
+    session.commit()
+    session.expire_all()
+
+    rows = session.query(BeatmapObject).order_by(BeatmapObject.idx).all()
+    assert len(rows) == 254
+    first = rows[0]
+    assert (first.kind, first.time_ms, first.end_time_ms, first.pattern) == (
+        "slider",
+        14388,
+        14817,
+        "slider",
+    )
+    assert (first.spacing, first.angle, first.time_since_prev_ms) == (None, None, None)
+    patterns: dict[str, int] = dict(
+        session.execute(text("SELECT pattern, count(*) FROM hit_objects GROUP BY pattern")).all()
+    )
+    assert patterns == {"slider": 84, "spinner": 3, "stream": 18, "other": 149}
+
+
+def test_hit_objects_need_their_map(session: Session) -> None:
+    session.add_all(map_22423_objects()[:1])  # map 22423 isn't stored
+
+    with pytest.raises(IntegrityError, match="hit_objects_beatmap_id_fkey"):
+        session.commit()
+
+
+def test_deleting_a_map_deletes_its_objects(session: Session, engine: Engine) -> None:
+    session.add(map_row(OsuScore.model_validate(load("scores_best.json")[0])))
+    session.flush()
+    session.add_all(map_22423_objects())
+    session.commit()
+
+    with engine.begin() as conn:
+        conn.execute(text("DELETE FROM beatmaps WHERE id = 22423"))
+        remaining = conn.execute(text("SELECT count(*) FROM hit_objects")).scalar_one()
+
+    assert remaining == 0
+
+
+def test_an_objects_position_in_its_map_is_unique(session: Session) -> None:
+    session.add(map_row(OsuScore.model_validate(load("scores_best.json")[0])))
+    session.flush()
+    first, second = map_22423_objects()[:2]
+    second.idx = first.idx
+    session.add_all([first, second])
+
+    with pytest.raises(IntegrityError, match="hit_objects_pkey"):
+        session.commit()

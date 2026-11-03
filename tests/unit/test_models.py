@@ -24,6 +24,7 @@ from osu_coach.osu.schemas import (
 PLAYERS: Table = Base.metadata.tables["players"]
 SCORES: Table = Base.metadata.tables["scores"]
 BEATMAPS: Table = Base.metadata.tables["beatmaps"]
+HIT_OBJECTS: Table = Base.metadata.tables["hit_objects"]
 
 
 def col(table: Table, name: str) -> Column[object]:
@@ -40,7 +41,7 @@ def field_allows_none(model: type[BaseModel], field: str) -> bool:
 
 
 def test_tables() -> None:
-    assert set(Base.metadata.tables) == {"players", "scores", "beatmaps"}
+    assert set(Base.metadata.tables) == {"players", "scores", "beatmaps", "hit_objects"}
 
 
 @pytest.mark.parametrize(("table", "key"), [(PLAYERS, "osu_id"), (SCORES, "id"), (BEATMAPS, "id")])
@@ -73,6 +74,18 @@ def test_scores_have_exactly_two_foreign_keys() -> None:
     assert {fk.parent.name for fk in SCORES.foreign_keys} == {"player_id", "beatmap_id"}
 
 
+def test_hit_objects_are_keyed_by_map_and_position() -> None:
+    assert [c.name for c in HIT_OBJECTS.primary_key] == ["beatmap_id", "idx"]
+
+
+def test_hit_objects_belong_to_their_map() -> None:
+    (fk,) = HIT_OBJECTS.foreign_keys
+
+    assert fk.target_fullname == "beatmaps.id"
+    # The objects are part of the map: deleting it removes them.
+    assert fk.ondelete == "CASCADE"
+
+
 def test_beatmaps_reference_nothing() -> None:
     assert not BEATMAPS.foreign_keys
 
@@ -91,6 +104,7 @@ def test_beatmap_checksum_is_unique() -> None:
         (PLAYERS, {"players_pkey"}),
         (SCORES, {"scores_pkey", "scores_player_id_fkey", "scores_beatmap_id_fkey"}),
         (BEATMAPS, {"beatmaps_pkey", "beatmaps_checksum_key"}),
+        (HIT_OBJECTS, {"hit_objects_pkey", "hit_objects_beatmap_id_fkey"}),
     ],
 )
 def test_constraint_names_follow_the_convention(table: Table, want: set[str]) -> None:
@@ -109,6 +123,8 @@ def test_constraint_names_follow_the_convention(table: Table, want: set[str]) ->
         (PLAYERS, {"global_rank"}),  # inactive players have no rank
         (SCORES, {"pp"}),  # failed plays and unranked maps have no pp
         (BEATMAPS, {"max_combo", "checksum"}),  # a score's map data has no max combo
+        # Not defined for the first object or next to a spinner:
+        (HIT_OBJECTS, {"spacing", "angle", "time_since_prev_ms"}),
     ],
 )
 def test_only_these_columns_are_nullable(table: Table, nullable: set[str]) -> None:
@@ -216,6 +232,8 @@ def test_indexes() -> None:
     }
     # The checksum's unique constraint already gives it an index; nothing else is needed.
     assert names(BEATMAPS) == {}
+    # (beatmap_id, idx) is the key; the pattern index is for "misses by pattern".
+    assert names(HIT_OBJECTS) == {"ix_hit_objects_pattern": ["pattern"]}
 
 
 def test_username_is_not_unique() -> None:

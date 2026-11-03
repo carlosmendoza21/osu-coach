@@ -10,6 +10,7 @@ temporary folder.
 
 from collections import Counter
 from collections.abc import AsyncIterator
+from itertools import pairwise
 from pathlib import Path
 
 import httpx
@@ -23,6 +24,7 @@ from osu_coach.osu.files import BeatmapFiles
 from osu_coach.osu.ratelimiter import RateLimiter
 from osu_coach.osu.schemas import ScoreBeatmap
 from osu_coach.osufile import parse_osu
+from osu_coach.patterns import object_features
 
 pytestmark = pytest.mark.integration
 
@@ -83,3 +85,21 @@ async def test_parser_agrees_with_osu(maps: list[tuple[ScoreBeatmap, Path]]) -> 
 
     assert len(maps) >= MAPS_PER_PLAYER, "expected maps from both players"
     assert len(versions) >= 2, f"expected several file format versions, got {versions}"
+
+
+async def test_pattern_features_on_real_maps(maps: list[tuple[ScoreBeatmap, Path]]) -> None:
+    # Slider timing (BPM, slider speed changes, repeats) checked against the maps
+    # themselves: a slider must end before the next object starts.
+    labels: Counter[str] = Counter()
+    for beatmap, path in maps:
+        features = object_features(parse_osu(path.read_text(encoding="utf-8")))
+        overlaps = [
+            (a.idx, a.end_time_ms, b.time_ms)
+            for a, b in pairwise(features)
+            if a.kind == "slider" and a.end_time_ms > b.time_ms + 1  # 1 ms of rounding
+        ]
+        assert overlaps == [], f"map {beatmap.id}: sliders running into the next note"
+        labels.update(f.pattern for f in features)
+
+    # Top players' best plays are full of streams and jumps.
+    assert labels["stream"] > 0 and labels["jump"] > 0, labels

@@ -116,3 +116,29 @@ class Score(Base):
     # "This player's scores by pp" in one index scan. Postgres doesn't index foreign keys
     # on its own, and this also covers lookups by player_id alone.
     __table_args__ = (Index("ix_scores_player_pp", "player_id", "pp"),)
+
+
+class BeatmapObject(Base):
+    """One hit object of a map, with its pattern features (see osu_coach.patterns)."""
+
+    __tablename__ = "hit_objects"
+
+    # CASCADE: the objects belong to the map; deleting the map removes them.
+    beatmap_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("beatmaps.id", ondelete="CASCADE"), primary_key=True
+    )
+    idx: Mapped[int] = mapped_column(Integer, primary_key=True)  # order in the map, from 0
+    kind: Mapped[str] = mapped_column(String(8))  # "circle", "slider" or "spinner"
+    time_ms: Mapped[int] = mapped_column(Integer)
+    end_time_ms: Mapped[int] = mapped_column(Integer)  # sliders and spinners last a while
+    x: Mapped[float] = mapped_column(Float)  # osu! pixels: 0-512 wide, 0-384 tall
+    y: Mapped[float] = mapped_column(Float)
+    # Not defined for the first object or around spinners:
+    spacing: Mapped[float | None] = mapped_column(Float)  # osu! pixels from the previous
+    angle: Mapped[float | None] = mapped_column(Float)  # degrees, 0-180
+    time_since_prev_ms: Mapped[int | None] = mapped_column(Integer)
+    pattern: Mapped[str] = mapped_column(String(16))  # jump, stream, slider, spinner, other
+
+    # The primary key (beatmap_id, idx) already serves "all objects of a map, in order".
+    # This one serves "misses by pattern" once replays are analyzed.
+    __table_args__ = (Index("ix_hit_objects_pattern", "pattern"),)
