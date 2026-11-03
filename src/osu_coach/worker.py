@@ -10,9 +10,11 @@ from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
+from osu_coach.beatmaps import fetch_beatmap as fetch_one_beatmap
 from osu_coach.config import get_settings
 from osu_coach.osu.auth import TokenProvider
 from osu_coach.osu.client import OsuClient
+from osu_coach.osu.files import BeatmapFiles
 from osu_coach.osu.ratelimiter import RateLimiter
 from osu_coach.sync import sync_player
 
@@ -44,5 +46,32 @@ async def _osu_sync(user: int | str) -> dict[str, Any]:
     finally:
         # Close what we opened, even if the sync failed. The error itself still reaches
         # Celery, which marks the task as failed.
+        await redis.aclose()
+        await engine.dispose()
+
+
+@celery_app.task(name="fetch_beatmap")
+def fetch_beatmap(beatmap_id: int) -> dict[str, Any]:
+    """Fetch one map: its details, its .osu file, and its hit objects. Returns a summary."""
+    return asyncio.run(_fetch_beatmap(beatmap_id), loop_factory=asyncio.SelectorEventLoop)
+
+
+async def _fetch_beatmap(beatmap_id: int) -> dict[str, Any]:
+    # Same setup as _osu_sync: a fresh engine and clients for this run, closed at the end.
+    engine = create_async_engine(settings.database_url, poolclass=NullPool)
+    redis: Redis = Redis.from_url(settings.redis_url)
+
+    try:
+        async with (
+            httpx.AsyncClient(timeout=20) as http,
+            async_sessionmaker(engine)() as session,
+        ):
+            limiter = RateLimiter(redis)  # one shared limit for API calls and file downloads
+            tokens = TokenProvider(http, redis, settings.osu_client_id, settings.osu_client_secret)
+            osu = OsuClient(http, tokens, limiter)
+            files = BeatmapFiles(http, limiter, settings.data_dir / "beatmaps")
+            result = await fetch_one_beatmap(osu, files, session, beatmap_id)
+        return asdict(result)
+    finally:
         await redis.aclose()
         await engine.dispose()

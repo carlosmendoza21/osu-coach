@@ -10,9 +10,10 @@ so running this again changes nothing but the synced player's latest values.
 import pytest
 from sqlalchemy import create_engine, text
 
+from osu_coach.beatmaps import UnsupportedModeError
 from osu_coach.config import get_settings
 from osu_coach.osu.client import OsuNotFoundError
-from osu_coach.worker import celery_app, osu_sync
+from osu_coach.worker import celery_app, fetch_beatmap, osu_sync
 
 pytestmark = pytest.mark.integration
 
@@ -56,6 +57,21 @@ def test_unknown_player_fails_the_task() -> None:
     task = osu_sync.delay("no-such-player-osu-coach-test")
 
     with pytest.raises(OsuNotFoundError):
+        task.get(timeout=TIMEOUT_S)
+
+    assert task.state == "FAILURE"
+
+
+def test_fetch_beatmap_through_the_worker() -> None:
+    result = fetch_beatmap.delay(22423).get(timeout=TIMEOUT_S)
+
+    assert result == {"beatmap_id": 22423, "version": "Hard", "objects": 254}
+
+
+def test_fetch_beatmap_refuses_other_modes() -> None:
+    task = fetch_beatmap.delay(4139830)  # a taiko map
+
+    with pytest.raises(UnsupportedModeError):
         task.get(timeout=TIMEOUT_S)
 
     assert task.state == "FAILURE"
