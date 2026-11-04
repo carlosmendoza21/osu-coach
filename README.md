@@ -53,7 +53,7 @@ every push.
 On Windows, async database code needs a selector event loop (psycopg can't use the
 default one); `tests/conftest.py` sets it for the tests, and the worker task sets it too.
 
-**Unit tests** ([`tests/unit/`](tests/unit), 524 tests): call the code directly with nothing
+**Unit tests** ([`tests/unit/`](tests/unit), 630 tests): call the code directly with nothing
 running. `respx` fakes the osu! token endpoint (and blocks any unmocked request),
 `fakeredis` stands in for Redis, and the rate limiter gets a fake clock, so a 60 s window
 runs instantly.
@@ -154,6 +154,25 @@ endings, one with `\n`):
 - Anything broken raises `OsuFileError` naming the line: a file that isn't `.osu`, a
   missing or non-numeric difficulty value, bad timing points, bad or unknown hit objects
 
+*`.osr` parser* (106), on replays built byte by byte in the test, so every field can be set:
+- The header from both osu!stable and osu!lazer: counts and combo as unsigned numbers,
+  UTF-8 names (and ones over 127 bytes), the play time exact to the microsecond in UTC, the
+  4-byte score id of replays before 2014, Target Practice's extra 8 bytes, and lazer's
+  score data block, which gives lazer's mods (Classic too) and the score id lazer leaves
+  out of the header. A score id of 0 or -1, or a non-number in lazer's block, is no id
+- Mods as osu! shows them: `NC` not `NC+DT`, `PF` not `PF+SD`, and a hand-made file with
+  only NC's bit doesn't crash
+- Frames follow osu!lazer's decoder: times are running totals; stable's two placeholder
+  frames are dropped but their time counts (the second sits at the skip point, so losing
+  it would shift every frame); frames that step back are skipped but move the clock; the
+  seed frame is skipped wherever it is; empty or short entries are ignored
+- Anything broken is a `ReplayFileError` with a fixed message: a file cut off at any byte,
+  every byte damaged two ways, other game modes, no map checksum, bad strings, dates
+  outside year 1-9999, non-numeric or `nan`/`inf` frame values, cut LZMA data, a missing
+  or unreadable lazer block or mod list, and no frames. Compressed data that unpacks past
+  16 MB (frames) or 1 MB (lazer's block) is refused while unpacking: a 20 MB bomb never
+  uses more than LZMA's own 8 MB buffer
+
 *Worker tasks* (2): the tasks' names, and the errors declared as expected (`throws=`), so
 Celery logs a missing player or a taiko map in one line instead of a traceback.
 
@@ -211,7 +230,7 @@ statements are compiled to Postgres SQL:
 - The response has exactly the public fields; the worker is waited on in a thread with a
   30 s timeout
 
-**Integration tests** ([`tests/integration/`](tests/integration), 119 tests): use real
+**Integration tests** ([`tests/integration/`](tests/integration), 128 tests): use real
 Redis, real time, real processes, and the real osu! API with the credentials in `.env`.
 They skip with the reason if Redis isn't running (`docker compose up -d redis`) or the
 credentials are missing, and clean up their Redis keys even if a check fails.
@@ -298,6 +317,13 @@ current #1 player's for new ones) are downloaded and parsed; every one matches o
 on object counts and AR/OD/CS/HP. Their pattern features are computed too: no slider runs
 into the next note on any of them, and both streams and jumps are found.
 
+*`.osr` replays* (9), on the real replays in `data/replays/` (gitignored: they're other
+players' plays; skipped if there are none). Each reads with frame times that never go
+back, the score id matches the website's file name, and (needs Redis and credentials)
+osu! finds the map by the replay's checksum, matching the file name's map id; the judged
+hits fit the map's object count, the frames run from before the first object to past the
+last, and a full combo has at least one key press per circle and slider.
+
 In Postgres, map 22423's 254 objects round-trip with their features, need their map,
 are deleted with it, and can't share a position.
 
@@ -370,6 +396,13 @@ Both suites were checked against deliberately broken code:
   their map
 - `maps_to_fetch` listing other modes, maps that already have objects, every player's maps,
   or a map twice; caching tokens that live 60 s or less; tasks without `throws=`
+- `osrfile.py` (19 breaks): dropping the placeholders' time (osrparse's behaviour, which is
+  why the parser reads the format itself), placeholders anywhere, keeping frames that step
+  back or not moving the clock for them, reading the seed frame, an 8-byte score id for
+  old replays, not skipping Target Practice's accuracy, signed counts, keeping id 0,
+  ignoring lazer's id or taking JSON `true` as one, `NC+DT`, lazer mods from the bits, no
+  unpack limit, accepting cut LZMA data or `nan` positions, an uncaught date overflow,
+  accepting other modes or an empty checksum
 
 `.gitattributes` marks `.osu` files as binary: git's `\r\n` to `\n` conversion would change
 a map file's MD5 and break the fixtures on other machines.
