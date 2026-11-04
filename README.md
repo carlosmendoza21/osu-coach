@@ -53,7 +53,7 @@ every push.
 On Windows, async database code needs a selector event loop (psycopg can't use the
 default one); `tests/conftest.py` sets it for the tests, and the worker task sets it too.
 
-**Unit tests** ([`tests/unit/`](tests/unit), 630 tests): call the code directly with nothing
+**Unit tests** ([`tests/unit/`](tests/unit), 650 tests): call the code directly with nothing
 running. `respx` fakes the osu! token endpoint (and blocks any unmocked request),
 `fakeredis` stands in for Redis, and the rate limiter gets a fake clock, so a 60 s window
 runs instantly.
@@ -154,7 +154,8 @@ endings, one with `\n`):
 - Anything broken raises `OsuFileError` naming the line: a file that isn't `.osu`, a
   missing or non-numeric difficulty value, bad timing points, bad or unknown hit objects
 
-*`.osr` parser* (106), on replays built byte by byte in the test, so every field can be set:
+*`.osr` parser* (106), on replays built byte by byte (`tests/osrdata.py`), so every field
+can be set:
 - The header from both osu!stable and osu!lazer: counts and combo as unsigned numbers,
   UTF-8 names (and ones over 127 bytes), the play time exact to the microsecond in UTC, the
   4-byte score id of replays before 2014, Target Practice's extra 8 bytes, and lazer's
@@ -172,6 +173,17 @@ endings, one with `\n`):
   or unreadable lazer block or mod list, and no frames. Compressed data that unpacks past
   16 MB (frames) or 1 MB (lazer's block) is refused while unpacking: a 20 MB bomb never
   uses more than LZMA's own 8 MB buffer
+
+*Storing a replay* (20), with real files and a fake session:
+- A new upload keeps the original `.osr` and writes its frames to Parquet, both named by
+  the file's SHA-256, then inserts one row and commits; the row holds every header field,
+  the frame count, and the frames' path relative to the data folder
+- A file uploaded before is only looked up: not parsed, not written again. A bad file
+  writes nothing. If another upload of the same file wins the race, its id is returned
+- The frames table keeps every frame exactly, in order, with 64-bit columns (a hand-made
+  file can't overflow them), and reads back the same from Parquet
+- A write goes to a temporary file and is renamed: a failed write leaves the old file and
+  no temporary file
 
 *Worker tasks* (2): the tasks' names, and the errors declared as expected (`throws=`), so
 Celery logs a missing player or a taiko map in one line instead of a traceback.
@@ -230,7 +242,7 @@ statements are compiled to Postgres SQL:
 - The response has exactly the public fields; the worker is waited on in a thread with a
   30 s timeout
 
-**Integration tests** ([`tests/integration/`](tests/integration), 128 tests): use real
+**Integration tests** ([`tests/integration/`](tests/integration), 138 tests): use real
 Redis, real time, real processes, and the real osu! API with the credentials in `.env`.
 They skip with the reason if Redis isn't running (`docker compose up -d redis`) or the
 credentials are missing, and clean up their Redis keys even if a check fails.
@@ -334,6 +346,13 @@ storing the objects rolls the map back too; and a real fetch from osu! (needs Re
 credentials). `maps_to_fetch` lists a player's osu! standard maps without hit objects:
 not maps already fetched, other modes or other players' maps, and each map once.
 
+*Storing a replay* (10, Postgres; also run in CI): the row holds the replay exactly
+(play time with its time zone, mods as a list); the same file twice is one row; five
+uploads of one file at the same moment give one row and one id; a bad file stores no row;
+the database itself refuses a second row for one file. A replay finds its map by checksum
+once the map is stored, and not a newer version of the map. The real replays in
+`data/replays/` are stored and their frames read back.
+
 *Whole app* (5, the full stack running): over real HTTP, `/health`; peppy's profile with 50
 best plays sorted by pp; a repeat request served without a new sync; `404` for an unknown
 player; the endpoint in the OpenAPI docs.
@@ -403,6 +422,13 @@ Both suites were checked against deliberately broken code:
   ignoring lazer's id or taking JSON `true` as one, `NC+DT`, lazer mods from the bits, no
   unpack limit, accepting cut LZMA data or `nan` positions, an uncaught date overflow,
   accepting other modes or an empty checksum
+- `replays.py` and its migration (15 breaks): parsing before looking the file up, no
+  `ON CONFLICT`, no fallback after a lost race, no commit, an absolute frames path, not
+  keeping the original file, writing in place or leaving the temporary file, not creating
+  folders, a 32-bit time column, dropping the score id or player name, a wrong frame
+  count, and a migration without the unique hash or with a time zone-less play time.
+  Breaking the folders first hung the test run: one failed upload left the others'
+  sessions holding locks, so the test now uses a `TaskGroup` and the cleanup a lock timeout
 
 `.gitattributes` marks `.osu` files as binary: git's `\r\n` to `\n` conversion would change
 a map file's MD5 and break the fixtures on other machines.

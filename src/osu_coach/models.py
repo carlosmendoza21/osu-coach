@@ -11,6 +11,7 @@ from sqlalchemy import (
     DateTime,
     Float,
     ForeignKey,
+    Identity,
     Index,
     Integer,
     MetaData,
@@ -142,3 +143,36 @@ class BeatmapObject(Base):
     # The primary key (beatmap_id, idx) already serves "all objects of a map, in order".
     # This one serves "misses by pattern" once replays are analyzed.
     __table_args__ = (Index("ix_hit_objects_pattern", "pattern"),)
+
+
+class Replay(Base):
+    """An uploaded replay: who played which map, the result, and where its frames are."""
+
+    __tablename__ = "replays"
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
+    # SHA-256 of the uploaded file: uploading the same file again finds this row.
+    file_sha256: Mapped[str] = mapped_column(String(64), unique=True)
+    # The map, by its .osu file's MD5. Not a foreign key: the map may not be fetched yet,
+    # and joining on beatmaps.checksum only matches the exact version that was played.
+    beatmap_checksum: Mapped[str] = mapped_column(String(32), index=True)
+    # The online score. Not a foreign key either: only top and recent plays are synced.
+    score_id: Mapped[int | None] = mapped_column(BigInteger)
+    player_name: Mapped[str] = mapped_column(String(32))  # the replay has no player id
+    mods: Mapped[list[str]] = mapped_column(ARRAY(String))
+    lazer: Mapped[bool]
+    game_version: Mapped[int] = mapped_column(Integer)
+    count_300: Mapped[int] = mapped_column(Integer)
+    count_100: Mapped[int] = mapped_column(Integer)
+    count_50: Mapped[int] = mapped_column(Integer)
+    count_geki: Mapped[int] = mapped_column(Integer)
+    count_katu: Mapped[int] = mapped_column(Integer)
+    count_miss: Mapped[int] = mapped_column(Integer)
+    score: Mapped[int] = mapped_column(BigInteger)
+    max_combo: Mapped[int] = mapped_column(Integer)
+    perfect: Mapped[bool]
+    played_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    frame_count: Mapped[int] = mapped_column(Integer)
+    # The frames' Parquet file, relative to the data folder (it moves between machines).
+    frames_path: Mapped[str] = mapped_column(String(255))
+    parsed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
