@@ -13,6 +13,10 @@ docker compose up --build
 - `GET /players/{username}`: a player's profile, top 50 plays by pp and latest 20 plays.
   Synced from osu! through the worker when the stored copy is missing or older than
   10 minutes; otherwise served straight from the database
+- `POST /replays/upload` (a multipart `file`, at most 4 MB): stores an osu! standard
+  `.osr` replay (from stable or lazer) with its frames, and fetches its map in the
+  background. `201` for a new file, `200` for one uploaded before, `422` for a file that
+  isn't a valid replay, `413` for one that's too large
 - Postgres 16 + pgvector on `5432`, Redis on `6379`
 - The `migrate` service runs `alembic upgrade head` before the API and worker start.
 
@@ -53,7 +57,7 @@ every push.
 On Windows, async database code needs a selector event loop (psycopg can't use the
 default one); `tests/conftest.py` sets it for the tests, and the worker task sets it too.
 
-**Unit tests** ([`tests/unit/`](tests/unit), 650 tests): call the code directly with nothing
+**Unit tests** ([`tests/unit/`](tests/unit), 678 tests): call the code directly with nothing
 running. `respx` fakes the osu! token endpoint (and blocks any unmocked request),
 `fakeredis` stands in for Redis, and the rate limiter gets a fake clock, so a 60 s window
 runs instantly.
@@ -154,13 +158,15 @@ endings, one with `\n`):
 - Anything broken raises `OsuFileError` naming the line: a file that isn't `.osu`, a
   missing or non-numeric difficulty value, bad timing points, bad or unknown hit objects
 
-*`.osr` parser* (106), on replays built byte by byte (`tests/osrdata.py`), so every field
+*`.osr` parser* (111), on replays built byte by byte (`tests/osrdata.py`), so every field
 can be set:
 - The header from both osu!stable and osu!lazer: counts and combo as unsigned numbers,
   UTF-8 names (and ones over 127 bytes), the play time exact to the microsecond in UTC, the
   4-byte score id of replays before 2014, Target Practice's extra 8 bytes, and lazer's
   score data block, which gives lazer's mods (Classic too) and the score id lazer leaves
   out of the header. A score id of 0 or -1, or a non-number in lazer's block, is no id
+- The map checksum is lowercased and must be an MD5 (32 hex characters, the whole
+  string), or osu! could never find the map
 - Mods as osu! shows them: `NC` not `NC+DT`, `PF` not `PF+SD`, and a hand-made file with
   only NC's bit doesn't crash
 - Frames follow osu!lazer's decoder: times are running totals; stable's two placeholder
@@ -174,7 +180,7 @@ can be set:
   16 MB (frames) or 1 MB (lazer's block) is refused while unpacking: a 20 MB bomb never
   uses more than LZMA's own 8 MB buffer
 
-*Storing a replay* (20), with real files and a fake session:
+*Storing a replay* (28), with real files and a fake session:
 - A new upload keeps the original `.osr` and writes its frames to Parquet, both named by
   the file's SHA-256, then inserts one row and commits; the row holds every header field,
   the frame count, and the frames' path relative to the data folder
@@ -183,10 +189,24 @@ can be set:
 - The frames table keeps every frame exactly, in order, with 64-bit columns (a hand-made
   file can't overflow them), and reads back the same from Parquet
 - A write goes to a temporary file and is renamed: a failed write leaves the old file and
-  no temporary file
+  no temporary file. When Windows refuses the rename because another upload of the same
+  file is renaming at that moment, the other writer's identical file is kept
+- The replay's map: a map stored with the exact file and its hit objects isn't fetched
+  again (osu! isn't asked); a missing one is looked up by checksum and fetched, then
+  checked again; if osu!'s file is a newer version, `MapChangedError`; osu! errors pass
+  through with nothing fetched. The check is lowercased and needs the hit objects
+
+*Uploading* (15, `POST /replays/upload`), with a fake store, session and queue:
+- A new file is `201` with the replay (not its hash, file path or game version), and its
+  map is queued; the same file again is `200`; a stored map is never queued; a repeat
+  upload queues a still-missing map again (an earlier fetch may have failed)
+- A bad file is `422` with the parser's reason and nothing else happens; a file of exactly
+  4 MB is accepted and one byte more is `413` without parsing; a missing file (or the
+  wrong field name) is `422`; the documented responses are 200, 201, 413 and 422
 
 *Worker tasks* (2): the tasks' names, and the errors declared as expected (`throws=`), so
-Celery logs a missing player or a taiko map in one line instead of a traceback.
+Celery logs a missing player, a taiko map or a changed map in one line instead of a
+traceback.
 
 *Fetching a map* (16), with a fake client, file store and session:
 - One map is fetched, its file is asked for with osu!'s checksum, and the writes go map
@@ -242,7 +262,7 @@ statements are compiled to Postgres SQL:
 - The response has exactly the public fields; the worker is waited on in a thread with a
   30 s timeout
 
-**Integration tests** ([`tests/integration/`](tests/integration), 138 tests): use real
+**Integration tests** ([`tests/integration/`](tests/integration), 146 tests): use real
 Redis, real time, real processes, and the real osu! API with the credentials in `.env`.
 They skip with the reason if Redis isn't running (`docker compose up -d redis`) or the
 credentials are missing, and clean up their Redis keys even if a check fails.
@@ -346,20 +366,28 @@ storing the objects rolls the map back too; and a real fetch from osu! (needs Re
 credentials). `maps_to_fetch` lists a player's osu! standard maps without hit objects:
 not maps already fetched, other modes or other players' maps, and each map once.
 
-*Storing a replay* (10, Postgres; also run in CI): the row holds the replay exactly
+*Storing a replay* (14, Postgres; also run in CI): the row holds the replay exactly
 (play time with its time zone, mods as a list); the same file twice is one row; five
 uploads of one file at the same moment give one row and one id; a bad file stores no row;
 the database itself refuses a second row for one file. A replay finds its map by checksum
 once the map is stored, and not a newer version of the map. The real replays in
-`data/replays/` are stored and their frames read back.
+`data/replays/` are stored and their frames read back. The replay's map (with the fake
+osu! and file store, map 22423) is fetched with its 254 objects, not fetched again once
+stored, found in either letter case only with its hit objects, and a newer version is
+stored but refused as the replay's map.
 
-*Whole app* (5, the full stack running): over real HTTP, `/health`; peppy's profile with 50
+*Whole app* (7, the full stack running): over real HTTP, `/health`; peppy's profile with 50
 best plays sorted by pp; a repeat request served without a new sync; `404` for an unknown
-player; the endpoint in the OpenAPI docs.
+player; the endpoint in the OpenAPI docs. Day 3's goal: uploading a replay on map 22423
+(whose objects are removed first) stores the replay and queues the map, the worker stores
+all 254 objects, and uploading again is `200` with the same replay and nothing queued; a
+bad file is `422`.
 
-*Worker* (6, the full stack running): `fetch_beatmap` stores map 22423's 254 objects and
-refuses a taiko map. A sync queues `fetch_beatmap` for the player's maps without objects
-(a removed map is fetched back with all 254 objects), and a second sync queues none. `osu_sync` through the real Celery worker returns
+*Worker* (8, the full stack running): `fetch_beatmap` stores map 22423's 254 objects and
+refuses a taiko map. `fetch_replay_map` finds map 22423 by its checksum (and doesn't fetch
+it again, in either letter case), and fails with `OsuNotFoundError` for an unknown file. A sync queues `fetch_beatmap` for the player's maps without objects
+(a removed map is fetched back with all 254 objects), and a second sync queues none.
+`osu_sync` through the real Celery worker returns
 peppy's summary, repeated syncs don't duplicate rows, and an unknown player fails the task
 with `OsuNotFoundError`. It writes to the dev database, like the app.
 
@@ -429,6 +457,12 @@ Both suites were checked against deliberately broken code:
   count, and a migration without the unique hash or with a time zone-less play time.
   Breaking the folders first hung the test run: one failed upload left the others'
   sessions holding locks, so the test now uses a `TaskGroup` and the cleanup a lock timeout
+- Uploading and the replay's map (16 breaks): an off-by-one size limit or reading only up
+  to it, a repeat upload still `201`, an uncaught bad file (`500`), always queueing the
+  map, never re-queueing on a repeat, queueing the wrong value, a stored-map check without
+  hit objects or lowercasing, no check before or after fetching, ignoring every refused
+  rename, a checksum not lowercased or not checked as an MD5 (or with `match` instead of
+  `fullmatch`), and the task without `MapChangedError` in `throws=`
 
 `.gitattributes` marks `.osu` files as binary: git's `\r\n` to `\n` conversion would change
 a map file's MD5 and break the fixtures on other machines.
@@ -448,7 +482,7 @@ Each makes at least one test fail.
 ```
 src/osu_coach/
   main.py      FastAPI app
-  api/         routers: /health, /players/{username}
+  api/         routers: /health, /players/{username}, /replays/upload
   osu/auth.py  osu! API token (client credentials), cached in Redis
   osu/ratelimiter.py  shared rate limit for osu! requests (sliding window in Redis)
   osu/retry.py        retries for temporary failures (backoff, jitter, Retry-After)
@@ -458,11 +492,13 @@ src/osu_coach/
   osufile.py   parse .osu files: difficulty, timing points, hit objects
   patterns.py  per-object features: slider end times, spacing, angle, pattern labels
   beatmaps.py  fetch one map: details, verified .osu file, hit objects (fetch_beatmap task)
+  osrfile.py   parse .osr replays (stable and lazer): header, mods, frames
+  replays.py   store an upload (original, Parquet frames, row); fetch the replay's map
   sync.py      save a player and their scores from osu! (upserts, one transaction)
   config.py    settings from env / .env
   db.py        async SQLAlchemy engine + session dependency
-  models.py    SQLAlchemy declarative base
-  worker.py    Celery app and the osu_sync task
+  models.py    the database tables
+  worker.py    Celery app and its tasks: osu_sync, fetch_beatmap, fetch_replay_map
 migrations/    Alembic
 tests/
   unit/        no services needed

@@ -82,6 +82,11 @@ def test_counts_are_unsigned() -> None:
     assert (r.count_300, r.count_miss, r.max_combo) == (40000, 65535, 65535)
 
 
+def test_the_checksum_is_lowercased() -> None:
+    # MD5 is the same in either case; osu! (and the beatmaps table) use lowercase.
+    assert parse_replay(osr(checksum=CHECKSUM.upper())).beatmap_checksum == CHECKSUM
+
+
 def test_names_are_utf8() -> None:
     assert parse_replay(osr(player="Ωmega 東方")).player == "Ωmega 東方"
 
@@ -276,6 +281,11 @@ def bomb(size: int) -> bytes:
         (osr(mode=3), "only osu! standard replays are supported, not mania"),
         (osr(checksum=None), "doesn't say which map"),
         (osr(checksum=""), "doesn't say which map"),
+        # osu! looks maps up by MD5: anything else could never be found.
+        (osr(checksum="z" * 32), "map checksum isn't an MD5"),  # not hex
+        (osr(checksum="a" * 31), "map checksum isn't an MD5"),  # one short
+        (osr(checksum="a" * 33), "map checksum isn't an MD5"),  # one over
+        (osr(checksum=CHECKSUM + chr(10)), "map checksum isn't an MD5"),  # a newline after
         (osr(player=b"\x05"), DAMAGED),  # a string must start with 0x00 or 0x0b
         (osr(player=b"\x0b\x02\xff\xfe"), DAMAGED),  # not UTF-8
         (osr(player=b"\x0b\xff\xff\xff\xff\x0f"), DAMAGED),  # longer than the file

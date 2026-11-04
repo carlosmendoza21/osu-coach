@@ -17,6 +17,8 @@ from osu_coach.osu.auth import TokenProvider
 from osu_coach.osu.client import OsuClient, OsuNotFoundError
 from osu_coach.osu.files import BeatmapFiles
 from osu_coach.osu.ratelimiter import RateLimiter
+from osu_coach.replays import MapChangedError
+from osu_coach.replays import fetch_replay_map as fetch_one_replay_map
 from osu_coach.sync import sync_player
 
 settings = get_settings()
@@ -82,6 +84,35 @@ async def _fetch_beatmap(beatmap_id: int) -> dict[str, Any]:
             osu = OsuClient(http, tokens, limiter)
             files = BeatmapFiles(http, limiter, settings.data_dir / "beatmaps")
             result = await fetch_one_beatmap(osu, files, session, beatmap_id)
+        return asdict(result)
+    finally:
+        await redis.aclose()
+        await engine.dispose()
+
+
+@celery_app.task(
+    name="fetch_replay_map",
+    throws=(OsuNotFoundError, UnsupportedModeError, MapChangedError),
+)
+def fetch_replay_map(checksum: str) -> dict[str, Any]:
+    """Make sure the map an uploaded replay was played on is stored, by its file's MD5."""
+    return asyncio.run(_fetch_replay_map(checksum), loop_factory=asyncio.SelectorEventLoop)
+
+
+async def _fetch_replay_map(checksum: str) -> dict[str, Any]:
+    engine = create_async_engine(settings.database_url, poolclass=NullPool)
+    redis: Redis = Redis.from_url(settings.redis_url)
+
+    try:
+        async with (
+            httpx.AsyncClient(timeout=20) as http,
+            async_sessionmaker(engine)() as session,
+        ):
+            limiter = RateLimiter(redis)
+            tokens = TokenProvider(http, redis, settings.osu_client_id, settings.osu_client_secret)
+            osu = OsuClient(http, tokens, limiter)
+            files = BeatmapFiles(http, limiter, settings.data_dir / "beatmaps")
+            result = await fetch_one_replay_map(osu, files, session, checksum)
         return asdict(result)
     finally:
         await redis.aclose()

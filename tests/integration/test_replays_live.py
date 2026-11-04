@@ -1,16 +1,18 @@
 """Integration tests for osu_coach.replays against a real Postgres.
 
 Run with:  uv run pytest -m integration
-Needs:     Postgres (docker compose up -d postgres); the last test also needs .osr files in
-           data/replays/. Each skips with the reason if what it needs is missing.
+Needs:     Postgres (docker compose up -d postgres); the real-replay test also needs .osr
+           files in data/replays/. Each skips with the reason if what it needs is missing.
 Uses a separate `<db>_test` database (see conftest.py) and pytest's temporary folder for
-the files. Replays are built by tests/osrdata.py.
+the files. Replays are built by tests/osrdata.py; the map tests use the fake osu! and file
+store from tests/unit/test_beatmaps.py (map 22423), so only the database is real.
 """
 
 import asyncio
 from collections.abc import AsyncIterator, Iterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import cast
 
 import pytest
 from sqlalchemy import Engine, text
@@ -20,9 +22,22 @@ from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async
 from sqlalchemy.pool import NullPool
 
 from osu_coach.osrfile import ReplayFileError, parse_replay
-from osu_coach.replays import StoredReplay, load_frames, sha256_hex, store_replay
+from osu_coach.osu.client import OsuClient
+from osu_coach.osu.files import BeatmapFiles
+from osu_coach.osu.schemas import OsuBeatmap
+from osu_coach.replays import (
+    MapChangedError,
+    ReplayMap,
+    StoredReplay,
+    fetch_replay_map,
+    load_frames,
+    sha256_hex,
+    store_replay,
+    stored_map,
+)
 from tests.osrdata import CHECKSUM, PLAYED_AT, lazer_osr, osr
-from tests.support import ROOT
+from tests.support import ROOT, load
+from tests.unit.test_beatmaps import FakeFiles, FakeOsu, beatmap
 
 pytestmark = pytest.mark.integration
 
@@ -218,3 +233,73 @@ async def test_real_replays_are_stored(db: AsyncEngine, engine: Engine, tmp_path
         assert frames["time_ms"].is_sorted()
 
     assert rows(engine, "SELECT count(*) FROM replays") == [(len(REPLAYS),)]
+
+
+# ---------- The replay's map ----------
+
+MAP_22423 = load("beatmap.json")["checksum"]  # the fixture map's .osu file
+
+
+class LookupOsu(FakeOsu):
+    """The fake osu! from the beatmap tests, plus lookup by checksum."""
+
+    def __init__(self, result: OsuBeatmap | None = None) -> None:
+        super().__init__(result)
+        self.lookups: list[str] = []
+
+    async def lookup_beatmap(self, checksum: str) -> OsuBeatmap:
+        self.lookups.append(checksum)
+        assert isinstance(self.result, OsuBeatmap)
+        return self.result
+
+
+async def fetch_map(db: AsyncEngine, osu: LookupOsu, checksum: str = MAP_22423) -> ReplayMap:
+    async with async_sessionmaker(db)() as session:
+        return await fetch_replay_map(
+            cast(OsuClient, osu), cast(BeatmapFiles, FakeFiles()), session, checksum
+        )
+
+
+async def find(db: AsyncEngine, checksum: str) -> int | None:
+    async with async_sessionmaker(db)() as session:
+        return await stored_map(session, checksum)
+
+
+async def test_a_replays_map_is_fetched_with_its_objects(db: AsyncEngine, engine: Engine) -> None:
+    osu = LookupOsu()
+
+    assert await fetch_map(db, osu) == ReplayMap(22423, fetched=True)
+    assert osu.lookups == [MAP_22423]
+    assert rows(engine, "SELECT count(*) FROM hit_objects WHERE beatmap_id = 22423") == [(254,)]
+
+
+async def test_a_stored_map_isnt_fetched_again(db: AsyncEngine) -> None:
+    await fetch_map(db, LookupOsu())
+    osu = LookupOsu()
+
+    assert await fetch_map(db, osu) == ReplayMap(22423, fetched=False)
+    assert osu.lookups == [] and osu.calls == []  # osu! not asked at all
+
+
+async def test_stored_map(db: AsyncEngine, engine: Engine) -> None:
+    assert await find(db, MAP_22423) is None  # nothing stored
+
+    add_map(engine, 22423, MAP_22423)
+    assert await find(db, MAP_22423) is None  # the map, but not its hit objects yet
+
+    await fetch_map(db, LookupOsu())
+    assert await find(db, MAP_22423) == 22423
+    assert await find(db, MAP_22423.upper()) == 22423  # either letter case
+    assert await find(db, "0" * 32) is None  # another file
+
+
+async def test_a_changed_map_is_refused(db: AsyncEngine, engine: Engine) -> None:
+    # osu! answers the old checksum with the map, whose current file is a newer version.
+    newer = beatmap(checksum="1" * 32)
+
+    with pytest.raises(MapChangedError, match="map 22423 has changed"):
+        await fetch_map(db, LookupOsu(newer), MAP_22423)
+    # The newer version is stored (its objects are right for it), but not as the
+    # version the replay was played on.
+    assert rows(engine, "SELECT checksum FROM beatmaps") == [("1" * 32,)]
+    assert await find(db, MAP_22423) is None

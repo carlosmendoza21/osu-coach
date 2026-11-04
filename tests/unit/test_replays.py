@@ -6,7 +6,9 @@ compiled to Postgres SQL. The same code against Postgres is in
 tests/integration/test_replays_live.py.
 """
 
+import os
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, cast
 
 import polars as pl
@@ -16,13 +18,19 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from osu_coach import replays
 from osu_coach.osrfile import Frame, ReplayFileError, parse_replay
+from osu_coach.osu.client import OsuApiError, OsuClient, OsuNotFoundError
+from osu_coach.osu.files import BeatmapFiles
 from osu_coach.replays import (
     FRAME_SCHEMA,
+    MapChangedError,
+    ReplayMap,
     StoredReplay,
+    fetch_replay_map,
     frames_frame,
     load_frames,
     sha256_hex,
     store_replay,
+    stored_map,
 )
 from tests.osrdata import CHECKSUM, PLAYED_AT, lazer_osr, osr
 
@@ -225,3 +233,113 @@ def test_a_failed_write_keeps_the_old_file(tmp_path: Path) -> None:
         replays._write_atomic(path, half_then_fail)
     assert path.read_bytes() == b"old"  # a reader never sees the half-written file
     assert files_in(tmp_path) == ["f.bin"]  # and the temporary file is gone
+
+
+# ---------- The replay's map ----------
+
+
+class FakeOsu:
+    """lookup_beatmap only: answers with a map id, or raises."""
+
+    def __init__(self, result: int | Exception = 4767844) -> None:
+        self.result = result
+        self.lookups: list[str] = []
+
+    async def lookup_beatmap(self, checksum: str) -> Any:
+        self.lookups.append(checksum)
+        if isinstance(self.result, Exception):
+            raise self.result
+        return SimpleNamespace(id=self.result)
+
+
+class FakeFetch:
+    """Stands in for beatmaps.fetch_beatmap, recording which map it was asked for."""
+
+    def __init__(self) -> None:
+        self.calls: list[int] = []
+
+    async def __call__(self, osu: Any, files: Any, session: Any, beatmap_id: int) -> None:
+        self.calls.append(beatmap_id)
+
+
+@pytest.fixture
+def fetch(monkeypatch: pytest.MonkeyPatch) -> FakeFetch:
+    fake = FakeFetch()
+    monkeypatch.setattr(replays, "fetch_beatmap", fake)
+    return fake
+
+
+async def fetch_map(session: FakeSession, osu: FakeOsu, checksum: str = CHECKSUM) -> ReplayMap:
+    return await fetch_replay_map(
+        cast(OsuClient, osu), cast(BeatmapFiles, None), cast(AsyncSession, session), checksum
+    )
+
+
+async def test_a_stored_map_isnt_fetched_again(fetch: FakeFetch) -> None:
+    osu = FakeOsu()
+
+    assert await fetch_map(FakeSession(22423), osu) == ReplayMap(22423, fetched=False)
+    assert osu.lookups == [] and fetch.calls == []  # nothing asked of osu!
+
+
+async def test_a_missing_map_is_looked_up_and_fetched(fetch: FakeFetch) -> None:
+    # Not stored; after the fetch, stored with the replay's exact file.
+    osu, session = FakeOsu(4767844), FakeSession(None, 4767844)
+
+    assert await fetch_map(session, osu) == ReplayMap(4767844, fetched=True)
+    assert osu.lookups == [CHECKSUM]
+    assert fetch.calls == [4767844]
+    assert session.events == ["SELECT", "SELECT"]  # checked before and after
+
+
+async def test_a_changed_map_is_an_error(fetch: FakeFetch) -> None:
+    # osu! found the map by the old checksum, but its current file is a newer version:
+    # still not stored with the replay's checksum after fetching.
+    with pytest.raises(MapChangedError, match="map 4767844 has changed"):
+        await fetch_map(FakeSession(None, None), FakeOsu(4767844))
+    assert fetch.calls == [4767844]
+
+
+@pytest.mark.parametrize(
+    "error",
+    [OsuNotFoundError("unknown map"), OsuApiError("osu! is down")],
+    ids=["not found", "osu! down"],
+)
+async def test_osu_errors_pass_through(fetch: FakeFetch, error: Exception) -> None:
+    with pytest.raises(type(error)):
+        await fetch_map(FakeSession(None), FakeOsu(error))
+    assert fetch.calls == []  # nothing fetched for a map osu! didn't give
+
+
+async def test_stored_map_needs_the_exact_file_and_its_objects() -> None:
+    session = FakeSession(None)
+    await stored_map(cast(AsyncSession, session), CHECKSUM.upper())
+
+    query = session.statements[0].compile(dialect=PG)
+    sql = " ".join(str(query).split())
+    assert "beatmaps.checksum = " in sql
+    assert "EXISTS (SELECT * FROM hit_objects WHERE hit_objects.beatmap_id = beatmaps.id)" in sql
+    assert list(query.params.values()) == [CHECKSUM]  # lowercased, like osu! writes it
+
+
+@pytest.mark.parametrize("other_writer_finished", [True, False], ids=["finished", "nothing"])
+def test_a_refused_rename(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, other_writer_finished: bool
+) -> None:
+    # Windows refuses a rename onto a file another writer is renaming at the same moment.
+    path = tmp_path / "f.bin"
+
+    def refused(src: Path, dst: Path) -> None:
+        if other_writer_finished:
+            dst.write_bytes(b"same")  # the other writer's file, with the same content
+        raise PermissionError("Access is denied")
+
+    monkeypatch.setattr(os, "replace", refused)  # what _write_atomic calls
+
+    if other_writer_finished:
+        replays._write_atomic(path, lambda p: p.write_bytes(b"same"))  # fine: it's there
+        assert path.read_bytes() == b"same"
+    else:
+        with pytest.raises(PermissionError):  # a real permission problem still shows
+            replays._write_atomic(path, lambda p: p.write_bytes(b"same"))
+    assert not list(tmp_path.glob("*.tmp"))  # the temporary file is gone either way

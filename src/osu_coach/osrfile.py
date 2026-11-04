@@ -7,6 +7,7 @@ osu!lazer replays, so frames line up with how osu! itself replays the file.
 import json
 import lzma
 import math
+import re
 import struct
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -99,9 +100,11 @@ def parse_replay(data: bytes) -> ReplayFile:
     game_version = r.unpack("i")
     lazer = game_version >= FIRST_LAZER_VERSION
 
-    beatmap_checksum = r.string()
+    beatmap_checksum = r.string().lower()  # osu! writes MD5s in lowercase
     if not beatmap_checksum:
         raise ReplayFileError("the replay doesn't say which map it was played on")
+    if not re.fullmatch(r"[0-9a-f]{32}", beatmap_checksum):
+        raise ReplayFileError("the replay's map checksum isn't an MD5")
     player = r.string()
     r.string()  # the replay's own MD5
     count_300, count_100, count_50, count_geki, count_katu, count_miss = (

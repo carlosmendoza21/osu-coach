@@ -15,7 +15,8 @@ from sqlalchemy import create_engine, text
 from osu_coach.beatmaps import UnsupportedModeError
 from osu_coach.config import get_settings
 from osu_coach.osu.client import OsuNotFoundError
-from osu_coach.worker import celery_app, fetch_beatmap, osu_sync
+from osu_coach.worker import celery_app, fetch_beatmap, fetch_replay_map, osu_sync
+from tests.support import load
 
 pytestmark = pytest.mark.integration
 
@@ -105,3 +106,23 @@ def test_sync_fetches_the_players_missing_maps() -> None:
         assert again["maps_queued"] == 0, "maps already stored aren't fetched again"
     finally:
         engine.dispose()
+
+
+def test_fetch_replay_map_through_the_worker() -> None:
+    # Map 22423 by its file's MD5, the way an uploaded replay names it.
+    checksum = load("beatmap.json")["checksum"]
+
+    result = fetch_replay_map.delay(checksum).get(timeout=TIMEOUT_S)
+    again = fetch_replay_map.delay(checksum.upper()).get(timeout=TIMEOUT_S)
+
+    assert result["beatmap_id"] == 22423
+    assert again == {"beatmap_id": 22423, "fetched": False}  # stored now: not fetched again
+
+
+def test_fetch_replay_map_for_an_unknown_file() -> None:
+    task = fetch_replay_map.delay("0" * 32)  # no map has this file
+
+    with pytest.raises(OsuNotFoundError):
+        task.get(timeout=TIMEOUT_S)
+
+    assert task.state == "FAILURE"

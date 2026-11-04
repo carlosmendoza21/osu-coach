@@ -16,6 +16,7 @@ dependencies = [
     "redis>=5.2",
     "httpx>=0.28.1",
     "polars>=2.1.0",
+    "python-multipart>=0.0.33",
 ]
 
 [dependency-groups]
