@@ -105,3 +105,26 @@ def lazer_osr(info: Any = None, **kwargs: Any) -> bytes:
     """A lazer replay: lazer writes -1 as the header's score id and no placeholder frames."""
     kwargs = {"version": LAZER, "score_id": -1, "frames": BODY, "seed": None, **kwargs}
     return osr(lazer={"mods": [], "online_id": 6604281970} if info is None else info, **kwargs)
+
+
+def play(
+    hit_objects: Sequence[Any], errors: Sequence[int] = (0,), missed: Sequence[int] = ()
+) -> list[RawFrame]:
+    """Frames that play a map: each circle and slider head tapped on its spot, `errors`
+    ms off (cycling through them), alternating M1 and M2. Spinners and the objects at
+    the indexes in `missed` are left alone. Give `osu_file.hit_objects`."""
+    events: list[tuple[int, float, float, int]] = []  # absolute time, x, y, keys
+    n = 0
+    for i, h in enumerate(hit_objects):
+        if h.kind == "spinner" or i in missed:
+            continue
+        t = h.time_ms + errors[n % len(errors)]
+        key = 1 if n % 2 == 0 else 2
+        events += [(t, h.x, h.y, key), (t + 30, h.x, h.y, 0)]
+        n += 1
+    frames: list[RawFrame] = []
+    last = 0
+    for t, x, y, keys in sorted(events):
+        frames.append((t - last, x, y, keys))
+        last = t
+    return frames

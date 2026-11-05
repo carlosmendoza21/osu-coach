@@ -15,8 +15,9 @@ import pytest
 from sqlalchemy import create_engine, text
 
 from osu_coach.config import get_settings
-from tests.osrdata import osr
-from tests.support import load
+from osu_coach.osufile import parse_osu
+from tests.osrdata import osr, play
+from tests.support import FIXTURES, load
 
 pytestmark = pytest.mark.integration
 
@@ -90,6 +91,28 @@ def dev_db(sql: str) -> None:
         engine.dispose()
 
 
+def forget_analysis(player: str) -> None:
+    """Clear the analysis of a test player's replay from earlier runs: an analyzed replay
+    needs nothing more, so a repeat upload would queue no jobs."""
+    dev_db(
+        "DELETE FROM hit_results WHERE replay_id IN "
+        f"(SELECT id FROM replays WHERE player_name = '{player}')"
+    )
+    dev_db(
+        "UPDATE replays SET analyzed_at = NULL, unstable_rate = NULL, beatmap_id = NULL "
+        f"WHERE player_name = '{player}'"
+    )
+
+
+def dev_value(sql: str) -> object:
+    engine = create_engine(get_settings().database_url)
+    try:
+        with engine.connect() as conn:
+            return conn.execute(text(sql)).scalar()
+    finally:
+        engine.dispose()
+
+
 def map_objects() -> object:
     engine = create_engine(get_settings().database_url)
     try:
@@ -104,6 +127,7 @@ def test_uploading_a_replay_stores_it_and_its_map(api: httpx.Client) -> None:
     # Day 3's goal: uploading a replay stores its map, the map's hit objects, and its
     # frames. A built replay on map 22423, whose objects are removed first so the upload
     # has to fetch them.
+    forget_analysis("osu-coach-test")
     dev_db("DELETE FROM hit_objects WHERE beatmap_id = 22423")
     data = osr(checksum=MAP_22423, player="osu-coach-test")
 
@@ -133,3 +157,36 @@ def test_a_bad_upload_is_refused(api: httpx.Client) -> None:
 
     assert resp.status_code == 422
     assert resp.json() == {"detail": "not a valid .osr file (cut short or damaged)"}
+
+
+def test_uploading_a_replay_analyzes_it(api: httpx.Client) -> None:
+    # Day 4's goal end to end: a replay that plays map 22423 (taps 6 ms either side) is
+    # uploaded; the map is fetched, then the replay judged and its analysis stored, with
+    # no one running anything. The map's objects and any earlier run's analysis go first.
+    osu_file = parse_osu((FIXTURES / "22423.osu").read_text(encoding="utf-8"))
+    judged = sum(1 for h in osu_file.hit_objects if h.kind != "spinner")
+    frames = play(osu_file.hit_objects, errors=(-6, 6))
+    data = osr(checksum=MAP_22423, player="osu-coach-analysis-test", frames=frames, seed=None)
+    forget_analysis("osu-coach-analysis-test")
+    dev_db("DELETE FROM hit_objects WHERE beatmap_id = 22423")
+
+    body = api.post("/replays/upload", files={"file": ("test.osr", data)}).json()
+    replay_id = body["replay"]["id"]
+    # The map was missing: fetched first, then the analysis (a chain).
+    assert body["map_job_id"] is not None
+    assert body["analysis_job_id"] is not None
+
+    deadline = time.monotonic() + TIMEOUT_S
+    ur_sql = f"SELECT unstable_rate FROM replays WHERE id = {replay_id}"
+    while (ur := dev_value(ur_sql)) is None:
+        assert time.monotonic() < deadline, "the worker didn't analyze the replay"
+        time.sleep(1)
+    assert ur == pytest.approx(60, abs=0.1)
+    results_sql = f"SELECT count(*) FROM hit_results WHERE replay_id = {replay_id}"
+    assert dev_value(results_sql) == judged
+
+    # Analyzed now: uploading again shows the analysis and queues nothing.
+    again = api.post("/replays/upload", files={"file": ("test.osr", data)}).json()
+    assert (again["map_job_id"], again["analysis_job_id"]) == (None, None)
+    assert again["replay"]["unstable_rate"] == pytest.approx(60, abs=0.1)
+    assert again["replay"]["analyzed_at"] is not None

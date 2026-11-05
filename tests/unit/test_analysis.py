@@ -1,26 +1,41 @@
 """Unit tests for osu_coach.analysis.
 
 The stats are checked on hand-made judgements; storing is checked with a fake session that
-records each statement compiled to Postgres SQL. The same code against Postgres is in
+records each statement compiled to Postgres SQL. analyze_replay runs on map 22423 (the
+saved fixture) with replays built to play it (tests/osrdata.py). The same code against
+Postgres is in
 tests/integration/test_analysis_live.py.
 """
 
 import statistics
+from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from osu_coach import analysis
 from osu_coach.analysis import (
     INSERT_BATCH,
+    MapNotStoredError,
+    ReplayNotFoundError,
     ReplayStats,
+    analyze_replay,
     replay_stats,
     results_by_pattern,
     store_analysis,
 )
-from osu_coach.difficulty import HitResult
+from osu_coach.difficulty import HitResult, UnsupportedModsError
 from osu_coach.judge import Judgement
+from osu_coach.models import Replay
+from osu_coach.osrfile import parse_replay
+from osu_coach.osu.files import BeatmapFiles
+from osu_coach.osufile import parse_osu
+from osu_coach.replays import frames_frame
+from tests.osrdata import RawFrame, osr, play
+from tests.support import FIXTURES, load
 
 PG = postgresql.dialect()  # type: ignore[no-untyped-call]  # SQLAlchemy leaves it untyped
 
@@ -254,3 +269,133 @@ async def test_results_by_pattern_query() -> None:
     ) in sql
     assert "WHERE hit_results.replay_id = " in sql
     assert "GROUP BY hit_objects.pattern, hit_results.result" in sql
+
+
+# ---------- analyze_replay ----------
+
+MAP_22423 = parse_osu((FIXTURES / "22423.osu").read_text(encoding="utf-8"))
+CHECKSUM_22423 = load("beatmap.json")["checksum"]
+JUDGED = sum(1 for h in MAP_22423.hit_objects if h.kind != "spinner")  # 251: 3 spinners
+
+
+class AnalyzeEnv:
+    """A stored replay of map 22423 (its frames really written to Parquet), a fake
+    session that only loads it, and the stored-map check and the storing replaced."""
+
+    def __init__(self, monkeypatch: pytest.MonkeyPatch, data_dir: Path) -> None:
+        self.data_dir = data_dir
+        self.map_stored = True
+        self.stored: list[tuple[int, int, list[Judgement], ReplayStats]] = []
+        self.file_gets: list[tuple[int, str | None]] = []
+
+        async def stored_map(session: Any, checksum: str) -> int | None:
+            return 22423 if self.map_stored else None
+
+        async def store(
+            session: Any, replay_id: int, beatmap_id: int, js: Any, stats: ReplayStats
+        ) -> None:
+            self.stored.append((replay_id, beatmap_id, list(js), stats))
+
+        monkeypatch.setattr(analysis, "stored_map", stored_map)
+        monkeypatch.setattr(analysis, "store_analysis", store)
+        self.replay(frames=play(MAP_22423.hit_objects))
+
+    def replay(
+        self, frames: list[RawFrame], mods: list[str] | None = None, counts: tuple[int, ...] = ()
+    ) -> None:
+        table = frames_frame(parse_replay(osr(frames=frames, seed=None)).frames)
+        table.write_parquet(self.data_dir / "frames.parquet")
+        c300, c100, c50, cmiss = counts or (254, 0, 0, 0)
+        self.row: Replay | None = Replay(
+            id=7, beatmap_checksum=CHECKSUM_22423, mods=mods or [], frames_path="frames.parquet",
+            count_300=c300, count_100=c100, count_50=c50, count_miss=cmiss,
+        )  # fmt: skip
+
+    async def get(self, model: type, key: int) -> Replay | None:
+        return self.row
+
+    async def file(self, beatmap_id: int, checksum: str | None) -> Path:
+        self.file_gets.append((beatmap_id, checksum))
+        return FIXTURES / "22423.osu"
+
+    async def run(self, replay_id: int = 7) -> dict[str, Any]:
+        files = cast(BeatmapFiles, SimpleNamespace(get=self.file))
+        session = cast(AsyncSession, SimpleNamespace(get=self.get))
+        return await analyze_replay(session, files, self.data_dir, replay_id)
+
+
+@pytest.fixture
+def aenv(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> AnalyzeEnv:
+    return AnalyzeEnv(monkeypatch, tmp_path)
+
+
+async def test_analyze_a_replay(aenv: AnalyzeEnv) -> None:
+    summary = await aenv.run()
+
+    [(replay_id, beatmap_id, js, stats)] = aenv.stored
+    assert (replay_id, beatmap_id, len(js)) == (7, 22423, JUDGED)
+    assert stats.counts == {"300": JUDGED, "100": 0, "50": 0, "miss": 0}
+    assert summary == {
+        "replay_id": 7,
+        "beatmap_id": 22423,
+        "counts": stats.counts,
+        # osu! also counts the 3 spinners, which aren't judged yet: no match on this map.
+        "matches_official": False,
+        "unstable_rate": 0.0,
+    }
+    # The map's file is asked for with the replay's checksum, so a wrong copy is refused.
+    assert aenv.file_gets == [(22423, CHECKSUM_22423)]
+
+
+async def test_matches_official_compares_every_count(aenv: AnalyzeEnv) -> None:
+    # Skipping object 4: the next tap (object 5's, 107 ms later) lands on 4, which is
+    # stacked under it and still inside its 50 window, so 4 is a 50 and 5 a miss.
+    skipped = play(MAP_22423.hit_objects, missed=(4,))
+    aenv.replay(skipped, counts=(JUDGED - 2, 0, 1, 1))
+    assert (await aenv.run())["matches_official"] is True
+
+    aenv.replay(skipped, counts=(JUDGED - 2, 1, 0, 1))  # a 100 where we judged a 50
+    assert (await aenv.run())["matches_official"] is False
+
+
+async def test_speed_mods_reach_the_stats(aenv: AnalyzeEnv) -> None:
+    aenv.replay(play(MAP_22423.hit_objects, errors=(-6, 6)), mods=["DT"])
+
+    await aenv.run()
+
+    ur = aenv.stored[0][3].unstable_rate
+    assert ur == pytest.approx(40, abs=0.1)  # 60 in song time, / 1.5 in real time
+
+
+async def test_hr_flips_the_map_when_judging(aenv: AnalyzeEnv) -> None:
+    # Taps where the file says, but with HR the map was flipped: nothing is hit.
+    aenv.replay(play(MAP_22423.hit_objects), mods=["HR"])
+
+    await aenv.run()
+
+    counts = aenv.stored[0][3].counts
+    assert counts["300"] < JUDGED // 4  # only circles near the middle line still hit
+
+
+async def test_an_unknown_replay(aenv: AnalyzeEnv) -> None:
+    aenv.row = None
+
+    with pytest.raises(ReplayNotFoundError, match="no replay 99"):
+        await aenv.run(99)
+    assert aenv.stored == []
+
+
+async def test_the_map_must_be_stored(aenv: AnalyzeEnv) -> None:
+    aenv.map_stored = False
+
+    with pytest.raises(MapNotStoredError, match="replay 7's map isn't stored yet"):
+        await aenv.run()
+    assert aenv.file_gets == [] and aenv.stored == []
+
+
+async def test_unsupported_mods_store_nothing(aenv: AnalyzeEnv) -> None:
+    aenv.replay(play(MAP_22423.hit_objects), mods=["RX"])
+
+    with pytest.raises(UnsupportedModsError, match="RX"):
+        await aenv.run()
+    assert aenv.stored == []

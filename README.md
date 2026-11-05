@@ -14,9 +14,10 @@ docker compose up --build
   Synced from osu! through the worker when the stored copy is missing or older than
   10 minutes; otherwise served straight from the database
 - `POST /replays/upload` (a multipart `file`, at most 4 MB): stores an osu! standard
-  `.osr` replay (from stable or lazer) with its frames, and fetches its map in the
-  background. `201` for a new file, `200` for one uploaded before, `422` for a file that
-  isn't a valid replay, `413` for one that's too large
+  `.osr` replay (from stable or lazer) with its frames, then in the background fetches its
+  map (if needed) and analyzes it hit by hit: UR, timing bias, aim error, results by
+  pattern. `201` for a new file, `200` for one uploaded before (with its analysis once
+  done), `422` for a file that isn't a valid replay, `413` for one that's too large
 - Postgres 16 + pgvector on `5432`, Redis on `6379`
 - The `migrate` service runs `alembic upgrade head` before the API and worker start.
 
@@ -57,7 +58,7 @@ every push.
 On Windows, async database code needs a selector event loop (psycopg can't use the
 default one); `tests/conftest.py` sets it for the tests, and the worker task sets it too.
 
-**Unit tests** ([`tests/unit/`](tests/unit), 817 tests): call the code directly with nothing
+**Unit tests** ([`tests/unit/`](tests/unit), 828 tests): call the code directly with nothing
 running. `respx` fakes the osu! token endpoint (and blocks any unmocked request),
 `fakeredis` stands in for Redis, and the rate limiter gets a fake clock, so a 60 s window
 runs instantly.
@@ -207,7 +208,7 @@ no longer reports AR or OD with mods, so there's nothing live to check):
 - Slider heads are judged like circles; spinners are left out for now; maps in file
   formats before v5 play 24 ms later
 
-*Analysis* (22), with hand-made judgements and a fake session:
+*Analysis* (29), with hand-made judgements and a fake session:
 - UR is 10 x the population spread of the timing errors (two hits 5 ms either side give
   50, not 70.7); the mean error shows early/late bias; the aim error is the mean distance
   from circle centers. Only hits count: a miss, even an early press, has no timing
@@ -218,6 +219,12 @@ no longer reports AR or OD with mods, so there's nothing live to check):
   summary on the replay with the database's time, then one commit
 - Results by pattern: every result listed (0 where none), joined through the map the
   replay was analyzed against, object by object, for this replay only
+- Analyzing a stored replay, on map 22423 with replays built to play it: the map's file is
+  asked for with the replay's checksum, all 251 circles and slider heads are judged and
+  stored, and `matches_official` compares every count with the file's (false here when
+  osu! also counts the 3 spinners, true when the header agrees; skipping a stacked note
+  lets the next tap hit it, a 50, and misses the next). DT's speed reaches the stats, HR
+  flips the map; an unknown replay, a map not stored yet, or RX store nothing
 
 *Storing a replay* (28), with real files and a fake session:
 - A new upload keeps the original `.osr` and writes its frames to Parquet, both named by
@@ -235,17 +242,22 @@ no longer reports AR or OD with mods, so there's nothing live to check):
   checked again; if osu!'s file is a newer version, `MapChangedError`; osu! errors pass
   through with nothing fetched. The check is lowercased and needs the hit objects
 
-*Uploading* (15, `POST /replays/upload`), with a fake store, session and queue:
+*Uploading* (19, `POST /replays/upload`), with a fake store, session and queue:
 - A new file is `201` with the replay (not its hash, file path or game version), and its
-  map is queued; the same file again is `200`; a stored map is never queued; a repeat
-  upload queues a still-missing map again (an earlier fetch may have failed)
+  analysis is queued, after fetching the map if it isn't stored; the same file again is
+  `200`; a stored map is never fetched again; a repeat upload of a replay not analyzed yet
+  queues it again (an earlier job may have failed); an analyzed one queues nothing and
+  comes back with its UR, timing bias, aim error and analysis time
+- Queueing: the analysis alone when the map is stored; otherwise a chain, fetching the map
+  then analyzing, so the analysis never runs if the fetch fails; the map job's id is
+  chosen up front (a new one each time) so both ids can be returned
 - A bad file is `422` with the parser's reason and nothing else happens; a file of exactly
   4 MB is accepted and one byte more is `413` without parsing; a missing file (or the
   wrong field name) is `422`; the documented responses are 200, 201, 413 and 422
 
 *Worker tasks* (2): the tasks' names, and the errors declared as expected (`throws=`), so
-Celery logs a missing player, a taiko map or a changed map in one line instead of a
-traceback.
+Celery logs a missing player, a taiko map, a changed map, an unknown replay, a map not
+stored yet or unsupported mods in one line instead of a traceback.
 
 *Fetching a map* (16), with a fake client, file store and session:
 - One map is fetched, its file is asked for with osu!'s checksum, and the writes go map
@@ -301,7 +313,7 @@ statements are compiled to Postgres SQL:
 - The response has exactly the public fields; the worker is waited on in a thread with a
   30 s timeout
 
-**Integration tests** ([`tests/integration/`](tests/integration), 160 tests): use real
+**Integration tests** ([`tests/integration/`](tests/integration), 166 tests): use real
 Redis, real time, real processes, and the real osu! API with the credentials in `.env`.
 They skip with the reason if Redis isn't running (`docker compose up -d redis`) or the
 credentials are missing, and clean up their Redis keys even if a check fails.
@@ -411,12 +423,16 @@ counts equal the official ones osu! wrote into the file, every circle and slider
 judged once, and the timing looks like a real player's (mean near 0, UR 30-200). All
 three current replays match exactly (gwb 1186/24/2/9, mrekk 2224/14/0/0 and 2838/18/0/0).
 
-*Analysis* (11, Postgres; also run in CI), on map 22423 and replays built on it: results
+*Analysis* (15, Postgres; also run in CI), on map 22423 and replays built on it: results
 and summary stored and read back exactly; analyzing again replaces everything (fewer
 objects, no leftover misses); another replay's results are left alone; an unanalyzed
 replay has empty columns. Deleting a replay deletes its results; an analyzed map can't be
 deleted; results need a replay and are one per object. Results by pattern equal a tally
 of the stored objects' labels, cover every object, and are empty before analysis.
+Analyzing a stored replay that plays the map (6 ms either side) with a real session,
+which expires loaded rows on commit as the worker's does: 251 results, UR 60, the map's
+id and analysis time on the replay, the same rows when analyzed twice; a replay whose map
+isn't stored, or no replay at all, is refused.
 
 *Storing a replay* (14, Postgres; also run in CI): the row holds the replay exactly
 (play time with its time zone, mods as a list); the same file twice is one row; five
@@ -428,16 +444,19 @@ osu! and file store, map 22423) is fetched with its 254 objects, not fetched aga
 stored, found in either letter case only with its hit objects, and a newer version is
 stored but refused as the replay's map.
 
-*Whole app* (7, the full stack running): over real HTTP, `/health`; peppy's profile with 50
+*Whole app* (8, the full stack running): over real HTTP, `/health`; peppy's profile with 50
 best plays sorted by pp; a repeat request served without a new sync; `404` for an unknown
 player; the endpoint in the OpenAPI docs. Day 3's goal: uploading a replay on map 22423
 (whose objects are removed first) stores the replay and queues the map, the worker stores
 all 254 objects, and uploading again is `200` with the same replay and nothing queued; a
-bad file is `422`.
+bad file is `422`. Day 4's goal end to end: a replay playing map 22423 is uploaded with the
+map's objects removed; the map is fetched and then the replay analyzed by the worker (UR
+60, all 251 results stored), and uploading again returns the analysis and queues nothing.
 
-*Worker* (8, the full stack running): `fetch_beatmap` stores map 22423's 254 objects and
+*Worker* (9, the full stack running): `fetch_beatmap` stores map 22423's 254 objects and
 refuses a taiko map. `fetch_replay_map` finds map 22423 by its checksum (and doesn't fetch
-it again, in either letter case), and fails with `OsuNotFoundError` for an unknown file. A sync queues `fetch_beatmap` for the player's maps without objects
+it again, in either letter case), and fails with `OsuNotFoundError` for an unknown file.
+`analyze_replay` fails with `ReplayNotFoundError` for a replay that doesn't exist. A sync queues `fetch_beatmap` for the player's maps without objects
 (a removed map is fetched back with all 254 objects), and a second sync queues none.
 `osu_sync` through the real Celery worker returns
 peppy's summary, repeated syncs don't duplicate rows, and an unknown player fails the task
@@ -535,6 +554,13 @@ Both suites were checked against deliberately broken code:
   the note-lock flag or aim not stored, no analyzed time or map id, updating every
   replay, the pattern join ignoring the map, the pattern query for every replay, results
   not filled with 0, and a migration without CASCADE or without the map's foreign key
+- `analyze_replay`, its task and the upload's queueing (16 breaks): no unknown-replay or
+  stored-map check, the map's file without its checksum, mods ignored, the speed not
+  passed to the stats, the official counts read after storing (the commit expires the
+  row: caught against Postgres), always matching official, the task without
+  `ReplayNotFoundError`, analyzed replays queued again, the map always or never fetched,
+  the chain in the wrong order or not a chain, the map job's id not given to it or used as
+  the analysis id, and the stats left out of the response
 
 `.gitattributes` marks `.osu` files as binary: git's `\r\n` to `\n` conversion would change
 a map file's MD5 and break the fixtures on other machines.
@@ -567,13 +593,14 @@ src/osu_coach/
   osrfile.py   parse .osr replays (stable and lazer): header, mods, frames
   difficulty.py  play conditions: mods applied, hit windows, circle radius, approach time
   judge.py     judge a replay hit by hit (lazer's rules): result, timing, aim, note lock
-  analysis.py  a judged replay's UR, timing bias and aim; stored hit by hit; by pattern
+  analysis.py  analyze a stored replay: judge it, store UR, timing bias, aim, hit by hit
   replays.py   store an upload (original, Parquet frames, row); fetch the replay's map
   sync.py      save a player and their scores from osu! (upserts, one transaction)
   config.py    settings from env / .env
   db.py        async SQLAlchemy engine + session dependency
   models.py    the database tables
-  worker.py    Celery app and its tasks: osu_sync, fetch_beatmap, fetch_replay_map
+  worker.py    Celery app and its tasks: osu_sync, fetch_beatmap, fetch_replay_map,
+               analyze_replay
 migrations/    Alembic
 tests/
   unit/        no services needed

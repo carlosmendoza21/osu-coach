@@ -1,10 +1,14 @@
-"""POST /replays/upload: store an .osr replay, and fetch its map in the background."""
+"""POST /replays/upload: store an .osr replay, then fetch its map and analyze it in the
+background."""
 
+import uuid
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Annotated
 
+from celery import chain
 from fastapi import APIRouter, Depends, HTTPException, Response, UploadFile
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -14,7 +18,7 @@ from osu_coach.db import get_session
 from osu_coach.models import Replay
 from osu_coach.osrfile import ReplayFileError
 from osu_coach.replays import store_replay, stored_map
-from osu_coach.worker import fetch_replay_map
+from osu_coach.worker import analyze_replay, fetch_replay_map
 
 router = APIRouter(tags=["replays"])
 
@@ -41,6 +45,11 @@ class ReplayOut(BaseModel):
     played_at: datetime
     frame_count: int
     parsed_at: datetime
+    # Set once the replay is analyzed (see osu_coach.analysis); null until then.
+    unstable_rate: float | None
+    mean_error_ms: float | None
+    mean_aim_error_px: float | None
+    analyzed_at: datetime | None
 
 
 class UploadResponse(BaseModel):
@@ -48,19 +57,37 @@ class UploadResponse(BaseModel):
     created: bool  # False if this exact file was uploaded before
     # The worker job fetching the replay's map; None if the map is already stored.
     map_job_id: str | None
+    # The job analyzing the replay (after the map job, if there is one); None if the
+    # replay was analyzed before.
+    analysis_job_id: str | None
 
 
 # ---------- Dependencies: tests replace these ----------
 
-QueueMapFn = Callable[[str], str]  # a map's checksum -> the job's id
+
+@dataclass(frozen=True)
+class QueuedJobs:
+    map_job_id: str | None
+    analysis_job_id: str
 
 
-def queue_map_via_worker(checksum: str) -> str:
-    return str(fetch_replay_map.delay(checksum).id)
+# (replay id, the map's checksum if the map must be fetched first) -> the jobs queued
+QueueFn = Callable[[int, str | None], QueuedJobs]
 
 
-def get_queue_map() -> QueueMapFn:
-    return queue_map_via_worker
+def queue_via_worker(replay_id: int, fetch_map: str | None) -> QueuedJobs:
+    analyze = analyze_replay.si(replay_id)  # si: takes no result from a job before it
+    if fetch_map is None:
+        return QueuedJobs(None, str(analyze.apply_async().id))
+    # A chain: the analysis starts only once the map is stored, and not at all if
+    # fetching it fails. The map job gets its id here, so both ids can be returned.
+    map_job_id = str(uuid.uuid4())
+    result = chain(fetch_replay_map.si(fetch_map).set(task_id=map_job_id), analyze).apply_async()
+    return QueuedJobs(map_job_id, str(result.id))
+
+
+def get_queue() -> QueueFn:
+    return queue_via_worker
 
 
 def get_data_dir() -> Path:
@@ -85,7 +112,7 @@ async def upload_replay(
     response: Response,
     session: Annotated[AsyncSession, Depends(get_session)],
     data_dir: Annotated[Path, Depends(get_data_dir)],
-    queue_map: Annotated[QueueMapFn, Depends(get_queue_map)],
+    queue: Annotated[QueueFn, Depends(get_queue)],
 ) -> UploadResponse:
     # One byte past the limit is enough to know the file is too large.
     data = await file.read(MAX_UPLOAD_BYTES + 1)
@@ -103,12 +130,16 @@ async def upload_replay(
     if not stored.created:
         response.status_code = 200
 
-    # Queued again on a repeat upload if the map still isn't stored (an earlier fetch may
-    # have failed); a map that's already stored is never fetched again.
-    map_job_id = None
-    if await stored_map(session, replay.beatmap_checksum) is None:
-        map_job_id = queue_map(replay.beatmap_checksum)
+    # Queued again on a repeat upload if the replay still isn't analyzed (an earlier job
+    # may have failed, say while osu! was down). A map that's stored isn't fetched again.
+    jobs = None
+    if replay.analyzed_at is None:
+        map_missing = await stored_map(session, replay.beatmap_checksum) is None
+        jobs = queue(replay.id, replay.beatmap_checksum if map_missing else None)
 
     return UploadResponse(
-        replay=ReplayOut.model_validate(replay), created=stored.created, map_job_id=map_job_id
+        replay=ReplayOut.model_validate(replay),
+        created=stored.created,
+        map_job_id=jobs.map_job_id if jobs else None,
+        analysis_job_id=jobs.analysis_job_id if jobs else None,
     )

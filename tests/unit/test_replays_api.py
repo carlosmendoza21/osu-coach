@@ -2,7 +2,7 @@
 
 No database, worker or osu!: storing the replay and the "is the map stored" check are
 replaced with fakes, the session only answers the reload by id, and queueing the map
-fetch is a fake (the get_queue_map dependency). The endpoint against the real stack is in
+fetch and analysis is a fake (the get_queue dependency). The endpoint against the real stack is in
 tests/integration/test_api_live.py.
 """
 
@@ -21,13 +21,12 @@ from osu_coach.main import create_app
 from osu_coach.models import Replay
 from osu_coach.osrfile import ReplayFileError
 from osu_coach.replays import StoredReplay
-from osu_coach.worker import fetch_replay_map
 from tests.osrdata import CHECKSUM, PLAYED_AT
 
 PARSED_AT = datetime(2026, 11, 4, 4, 26, 7, tzinfo=UTC)
 
 
-def replay_row(id: int = 1) -> Replay:
+def replay_row(id: int = 1, analyzed: bool = False) -> Replay:
     return Replay(
         id=id,
         file_sha256="f" * 64,
@@ -50,6 +49,10 @@ def replay_row(id: int = 1) -> Replay:
         frame_count=12626,
         frames_path="frames/x.parquet",
         parsed_at=PARSED_AT,
+        unstable_rate=95.5 if analyzed else None,
+        mean_error_ms=-1.81 if analyzed else None,
+        mean_aim_error_px=14.2 if analyzed else None,
+        analyzed_at=PARSED_AT if analyzed else None,
     )
 
 
@@ -73,7 +76,7 @@ class Env:
         self.session = FakeSession(replay_row())
         self.stored: list[tuple[bytes, Path]] = []
         self.map_checks: list[str] = []
-        self.queued: list[str] = []
+        self.queued: list[tuple[int, str | None]] = []
 
         async def store(session: Any, data_dir: Path, data: bytes) -> StoredReplay:
             self.stored.append((data, data_dir))
@@ -88,13 +91,13 @@ class Env:
         monkeypatch.setattr(api, "store_replay", store)
         monkeypatch.setattr(api, "stored_map", stored_map)
 
-    def queue(self, checksum: str) -> str:
-        self.queued.append(checksum)
-        return f"job-{len(self.queued)}"
+    def queue(self, replay_id: int, fetch_map: str | None) -> api.QueuedJobs:
+        self.queued.append((replay_id, fetch_map))
+        return api.QueuedJobs("map-job" if fetch_map else None, "analysis-job")
 
     async def post(self, files: Any = None) -> httpx.Response:
         app = create_app()
-        app.dependency_overrides[api.get_queue_map] = lambda: self.queue
+        app.dependency_overrides[api.get_queue] = lambda: self.queue
         app.dependency_overrides[api.get_data_dir] = lambda: self.data_dir
 
         async def session() -> AsyncIterator[FakeSession]:
@@ -139,14 +142,19 @@ async def test_a_new_replay(env: Env) -> None:
             "played_at": "2026-04-28T02:17:02.332400Z",
             "frame_count": 12626,
             "parsed_at": "2026-11-04T04:26:07Z",
+            "unstable_rate": None,
+            "mean_error_ms": None,
+            "mean_aim_error_px": None,
+            "analyzed_at": None,
         },
         "created": True,
-        "map_job_id": "job-1",
+        "map_job_id": "map-job",
+        "analysis_job_id": "analysis-job",
     }
     # The exact bytes go to the store, with the configured data folder.
     assert env.stored == [(b"replay bytes", env.data_dir)]
     assert env.session.gets == [(Replay, 1)]
-    assert env.queued == [CHECKSUM]  # the map wasn't stored, so it's fetched
+    assert env.queued == [(1, CHECKSUM)]  # the map wasn't stored: fetched, then analysis
 
 
 async def test_internal_fields_are_not_sent(env: Env) -> None:
@@ -166,14 +174,14 @@ async def test_the_same_file_again_is_200(env: Env) -> None:
 
 
 @pytest.mark.parametrize("created", [True, False], ids=["new", "repeat"])
-async def test_a_stored_map_isnt_queued(env: Env, created: bool) -> None:
+async def test_a_stored_map_isnt_fetched(env: Env, created: bool) -> None:
     env.result, env.map_stored = StoredReplay(1, created=created), True
 
     resp = await env.upload()
 
-    assert resp.json()["map_job_id"] is None
+    assert (resp.json()["map_job_id"], resp.json()["analysis_job_id"]) == (None, "analysis-job")
     assert env.map_checks == [CHECKSUM]
-    assert env.queued == []
+    assert env.queued == [(1, None)]  # analysis only
 
 
 async def test_a_repeat_queues_a_missing_map_again(env: Env) -> None:
@@ -182,8 +190,8 @@ async def test_a_repeat_queues_a_missing_map_again(env: Env) -> None:
 
     resp = await env.upload()
 
-    assert resp.json()["map_job_id"] == "job-1"
-    assert env.queued == [CHECKSUM]
+    assert resp.json()["map_job_id"] == "map-job"
+    assert env.queued == [(1, CHECKSUM)]
 
 
 # ---------- Refused uploads ----------
@@ -256,14 +264,90 @@ def test_the_endpoint_is_documented() -> None:
     assert "multipart/form-data" in operation["requestBody"]["content"]
 
 
-def test_queueing_uses_the_worker_task(monkeypatch: pytest.MonkeyPatch) -> None:
-    sent: list[str] = []
+async def test_an_analyzed_replay_queues_nothing(env: Env) -> None:
+    env.result, env.session = StoredReplay(1, created=False), FakeSession(replay_row(analyzed=True))
 
-    def delay(checksum: str) -> SimpleNamespace:
-        sent.append(checksum)
-        return SimpleNamespace(id="celery-task-id")
+    body = (await env.upload()).json()
 
-    monkeypatch.setattr(fetch_replay_map, "delay", delay)
+    assert (body["map_job_id"], body["analysis_job_id"]) == (None, None)
+    assert env.queued == [] and env.map_checks == []  # not even the map is looked up
+    # The stored analysis comes back with the replay.
+    analysis = {
+        k: body["replay"][k]
+        for k in ("unstable_rate", "mean_error_ms", "mean_aim_error_px", "analyzed_at")
+    }
+    assert analysis == {
+        "unstable_rate": 95.5,
+        "mean_error_ms": -1.81,
+        "mean_aim_error_px": 14.2,
+        "analyzed_at": "2026-11-04T04:26:07Z",
+    }
 
-    assert api.get_queue_map()(CHECKSUM) == "celery-task-id"
-    assert sent == [CHECKSUM]
+
+# ---------- Queueing on the worker ----------
+
+
+class FakeSignature:
+    """Stands in for a Celery task signature: records how it's set up and sent."""
+
+    def __init__(self, sent: list[Any], name: str, args: tuple[Any, ...]) -> None:
+        self.sent, self.name, self.args = sent, name, args
+        self.task_id: str | None = None
+
+    def set(self, task_id: str) -> "FakeSignature":
+        self.task_id = task_id
+        return self
+
+    def apply_async(self) -> SimpleNamespace:
+        self.sent.append(("alone", self.name, self.args))
+        return SimpleNamespace(id=f"{self.name}-id")
+
+
+@pytest.fixture
+def sent(monkeypatch: pytest.MonkeyPatch) -> list[Any]:
+    sent: list[Any] = []
+
+    def task(name: str) -> SimpleNamespace:
+        return SimpleNamespace(si=lambda *args: FakeSignature(sent, name, args))
+
+    def chain(*sigs: FakeSignature) -> SimpleNamespace:
+        def apply_async() -> SimpleNamespace:
+            sent.append(("chain", [(s.name, s.args, s.task_id) for s in sigs]))
+            return SimpleNamespace(id=f"{sigs[-1].name}-id")
+
+        return SimpleNamespace(apply_async=apply_async)
+
+    monkeypatch.setattr(api, "analyze_replay", task("analyze"))
+    monkeypatch.setattr(api, "fetch_replay_map", task("fetch"))
+    monkeypatch.setattr(api, "chain", chain)
+    return sent
+
+
+def test_a_stored_map_queues_the_analysis_alone(sent: list[Any]) -> None:
+    jobs = api.queue_via_worker(7, None)
+
+    assert jobs == api.QueuedJobs(None, "analyze-id")
+    assert sent == [("alone", "analyze", (7,))]
+
+
+def test_a_missing_map_is_fetched_first_in_a_chain(sent: list[Any]) -> None:
+    jobs = api.queue_via_worker(7, CHECKSUM)
+
+    [(kind, steps)] = sent
+    assert kind == "chain"
+    [(first, first_args, map_job_id), (second, second_args, _)] = steps
+    # Fetch the map, then analyze: the analysis never runs if the fetch fails.
+    assert (first, first_args, second, second_args) == ("fetch", (CHECKSUM,), "analyze", (7,))
+    # The map job's id is chosen up front, so both ids can be returned.
+    assert jobs == api.QueuedJobs(map_job_id, "analyze-id")
+    assert map_job_id is not None and len(map_job_id) == 36  # a UUID
+
+
+def test_each_chain_gets_its_own_map_job_id(sent: list[Any]) -> None:
+    a, b = api.queue_via_worker(7, CHECKSUM), api.queue_via_worker(8, CHECKSUM)
+
+    assert a.map_job_id != b.map_job_id
+
+
+def test_queueing_uses_the_worker() -> None:
+    assert api.get_queue() is api.queue_via_worker

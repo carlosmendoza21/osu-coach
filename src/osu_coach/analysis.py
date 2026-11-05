@@ -1,21 +1,37 @@
-"""A judged replay's summary (UR, timing bias, aim), stored with its hit-by-hit results.
+"""Analyzing a replay: judge it against its map, then store its hit-by-hit results and
+summary (UR, timing bias, aim).
 
 Timing stats are in real time: with DT the song runs 1.5x as fast, so an error of 15 ms
 of song time is 10 ms of the player's time. That's how osu! shows UR for speed mods.
 """
 
+import asyncio
 import statistics
 from collections.abc import Sequence
 from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
 
 from sqlalchemy import delete, func, insert, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from osu_coach.difficulty import HitResult
-from osu_coach.judge import Judgement, counts
+from osu_coach.difficulty import HitResult, play_conditions
+from osu_coach.judge import Judgement, counts, judge
 from osu_coach.models import BeatmapObject, Replay, ReplayHit
+from osu_coach.osrfile import Frame
+from osu_coach.osu.files import BeatmapFiles
+from osu_coach.osufile import parse_osu
+from osu_coach.replays import load_frames, stored_map
 
 INSERT_BATCH = 1000  # rows per INSERT; a long map has a few thousand objects
+
+
+class ReplayNotFoundError(LookupError):
+    """No stored replay has this id."""
+
+
+class MapNotStoredError(LookupError):
+    """The replay's map (that exact version, with its hit objects) isn't stored yet."""
 
 
 @dataclass(frozen=True)
@@ -103,3 +119,52 @@ async def results_by_pattern(session: AsyncSession, replay_id: int) -> dict[str,
     for pattern, result, count in await session.execute(stmt):
         by_pattern.setdefault(pattern, {"300": 0, "100": 0, "50": 0, "miss": 0})[result] = count
     return by_pattern
+
+
+async def analyze_replay(
+    session: AsyncSession, files: BeatmapFiles, data_dir: Path, replay_id: int
+) -> dict[str, Any]:
+    """Judge a stored replay against its stored map, and store the results and summary.
+
+    Returns a small JSON summary. Raises ReplayNotFoundError, MapNotStoredError (fetch the
+    map first: see osu_coach.replays.fetch_replay_map), or UnsupportedModsError (from
+    osu_coach.difficulty) for mods the judging doesn't model. Analyzing again replaces the
+    earlier results.
+    """
+    replay = await session.get(Replay, replay_id)
+    if replay is None:
+        raise ReplayNotFoundError(f"no replay {replay_id}")
+    beatmap_id = await stored_map(session, replay.beatmap_checksum)
+    if beatmap_id is None:
+        raise MapNotStoredError(f"replay {replay_id}'s map isn't stored yet")
+
+    # The .osu file is on disk from when the map was fetched; get() checks it against the
+    # checksum, and downloads it again only if it's missing or doesn't match.
+    map_path = await files.get(beatmap_id, replay.beatmap_checksum)
+    text = await asyncio.to_thread(map_path.read_text, encoding="utf-8")
+    osu = parse_osu(text)
+    table = await asyncio.to_thread(load_frames, data_dir, replay.frames_path)
+    frames = [Frame(*row) for row in table.iter_rows()]
+
+    conditions = play_conditions(osu.difficulty, replay.mods)
+    judgements = judge(osu, frames, conditions)
+    stats = replay_stats(judgements, conditions.rate)
+    # Read before storing: the commit expires the loaded row, and reloading it here
+    # would need another query.
+    official = {
+        "300": replay.count_300,
+        "100": replay.count_100,
+        "50": replay.count_50,
+        "miss": replay.count_miss,
+    }
+    await store_analysis(session, replay_id, beatmap_id, judgements, stats)
+
+    return {
+        "replay_id": replay_id,
+        "beatmap_id": beatmap_id,
+        "counts": stats.counts,
+        # Whether our judging agrees with osu!'s own counts in the file: the check that
+        # the analysis is right (it can't be yet for maps with spinners).
+        "matches_official": stats.counts == official,
+        "unstable_rate": stats.unstable_rate,
+    }

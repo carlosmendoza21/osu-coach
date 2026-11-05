@@ -12,10 +12,17 @@ import time
 import pytest
 from sqlalchemy import create_engine, text
 
+from osu_coach.analysis import ReplayNotFoundError
 from osu_coach.beatmaps import UnsupportedModeError
 from osu_coach.config import get_settings
 from osu_coach.osu.client import OsuNotFoundError
-from osu_coach.worker import celery_app, fetch_beatmap, fetch_replay_map, osu_sync
+from osu_coach.worker import (
+    analyze_replay,
+    celery_app,
+    fetch_beatmap,
+    fetch_replay_map,
+    osu_sync,
+)
 from tests.support import load
 
 pytestmark = pytest.mark.integration
@@ -123,6 +130,15 @@ def test_fetch_replay_map_for_an_unknown_file() -> None:
     task = fetch_replay_map.delay("0" * 32)  # no map has this file
 
     with pytest.raises(OsuNotFoundError):
+        task.get(timeout=TIMEOUT_S)
+
+    assert task.state == "FAILURE"
+
+
+def test_analyze_replay_for_an_unknown_replay() -> None:
+    task = analyze_replay.delay(2**62)  # no replay has this id
+
+    with pytest.raises(ReplayNotFoundError):
         task.get(timeout=TIMEOUT_S)
 
     assert task.state == "FAILURE"

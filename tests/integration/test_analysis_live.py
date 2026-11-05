@@ -10,14 +10,25 @@ tests/integration/test_replays_live.py, whose fixtures these share.
 from collections import Counter
 from collections.abc import Collection
 from pathlib import Path
+from typing import cast
 
 import pytest
 from sqlalchemy import Engine, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
-from osu_coach.analysis import ReplayStats, replay_stats, results_by_pattern, store_analysis
+from osu_coach.analysis import (
+    MapNotStoredError,
+    ReplayNotFoundError,
+    ReplayStats,
+    analyze_replay,
+    replay_stats,
+    results_by_pattern,
+    store_analysis,
+)
 from osu_coach.judge import Judgement
+from osu_coach.osu.files import BeatmapFiles
+from osu_coach.osufile import parse_osu
 from tests.integration.test_replays_live import (
     MAP_22423,
     LookupOsu,
@@ -27,7 +38,9 @@ from tests.integration.test_replays_live import (
     rows,
     store,
 )
-from tests.osrdata import osr
+from tests.osrdata import osr, play
+from tests.support import FIXTURES
+from tests.unit.test_beatmaps import FakeFiles
 
 __all__ = ["db", "empty_tables"]  # the shared fixtures
 
@@ -226,3 +239,64 @@ async def test_results_by_pattern_before_analysis(db: AsyncEngine, tmp_path: Pat
 
     assert await by_pattern(db, replay_id) == {}
     assert await by_pattern(db, 999) == {}  # no such replay
+
+
+# ---------- analyze_replay ----------
+
+MAP = parse_osu((FIXTURES / "22423.osu").read_text(encoding="utf-8"))
+JUDGED = sum(1 for h in MAP.hit_objects if h.kind != "spinner")  # 251: 3 spinners
+
+
+async def run_analysis(db: AsyncEngine, tmp_path: Path, replay_id: int) -> dict[str, object]:
+    # A real session, which expires loaded rows on commit, as the worker's does.
+    async with async_sessionmaker(db)() as session:
+        files = cast(BeatmapFiles, FakeFiles())
+        return await analyze_replay(session, files, tmp_path, replay_id)
+
+
+async def played_replay(db: AsyncEngine, tmp_path: Path) -> int:
+    """Map 22423 stored, and a stored replay playing it (taps 6 ms either side)."""
+    await fetch_map(db, LookupOsu())
+    frames = play(MAP.hit_objects, errors=(-6, 6))
+    data = osr(checksum=MAP_22423, frames=frames, seed=None, counts=(JUDGED, 0, 0, 0, 0, 0))
+    return (await store(db, tmp_path, data)).id
+
+
+async def test_a_stored_replay_is_analyzed(db: AsyncEngine, engine: Engine, tmp_path: Path) -> None:
+    replay_id = await played_replay(db, tmp_path)
+
+    summary = await run_analysis(db, tmp_path, replay_id)
+
+    assert summary["counts"] == {"300": JUDGED, "100": 0, "50": 0, "miss": 0}
+    assert summary["matches_official"] is True  # the header was written with these counts
+    assert rows(engine, "SELECT count(*) FROM hit_results") == [(JUDGED,)]
+    [(beatmap_id, ur, analyzed)] = rows(
+        engine, "SELECT beatmap_id, unstable_rate, analyzed_at IS NOT NULL FROM replays"
+    )
+    assert (beatmap_id, analyzed) == (22423, True)
+    assert ur == pytest.approx(60, abs=0.1)  # 6 ms either side: a spread of 6, x 10
+
+
+async def test_analyzing_twice_gives_the_same_rows(
+    db: AsyncEngine, engine: Engine, tmp_path: Path
+) -> None:
+    replay_id = await played_replay(db, tmp_path)
+    query = "SELECT idx, result, error_ms FROM hit_results ORDER BY idx"
+
+    await run_analysis(db, tmp_path, replay_id)
+    first = rows(engine, query)
+    await run_analysis(db, tmp_path, replay_id)
+
+    assert rows(engine, query) == first
+
+
+async def test_a_replay_whose_map_isnt_stored(db: AsyncEngine, tmp_path: Path) -> None:
+    replay_id = (await store(db, tmp_path, osr(checksum=MAP_22423))).id
+
+    with pytest.raises(MapNotStoredError):
+        await run_analysis(db, tmp_path, replay_id)
+
+
+async def test_an_unknown_replay(db: AsyncEngine, tmp_path: Path) -> None:
+    with pytest.raises(ReplayNotFoundError):
+        await run_analysis(db, tmp_path, 999)

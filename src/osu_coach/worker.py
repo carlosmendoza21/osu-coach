@@ -10,9 +10,12 @@ from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
+from osu_coach.analysis import MapNotStoredError, ReplayNotFoundError
+from osu_coach.analysis import analyze_replay as analyze_one_replay
 from osu_coach.beatmaps import UnsupportedModeError, maps_to_fetch
 from osu_coach.beatmaps import fetch_beatmap as fetch_one_beatmap
 from osu_coach.config import get_settings
+from osu_coach.difficulty import UnsupportedModsError
 from osu_coach.osu.auth import TokenProvider
 from osu_coach.osu.client import OsuClient, OsuNotFoundError
 from osu_coach.osu.files import BeatmapFiles
@@ -114,6 +117,32 @@ async def _fetch_replay_map(checksum: str) -> dict[str, Any]:
             files = BeatmapFiles(http, limiter, settings.data_dir / "beatmaps")
             result = await fetch_one_replay_map(osu, files, session, checksum)
         return asdict(result)
+    finally:
+        await redis.aclose()
+        await engine.dispose()
+
+
+@celery_app.task(
+    name="analyze_replay",
+    throws=(ReplayNotFoundError, MapNotStoredError, UnsupportedModsError),
+)
+def analyze_replay(replay_id: int) -> dict[str, Any]:
+    """Judge a stored replay against its map and store the results. Returns a summary."""
+    return asyncio.run(_analyze_replay(replay_id), loop_factory=asyncio.SelectorEventLoop)
+
+
+async def _analyze_replay(replay_id: int) -> dict[str, Any]:
+    engine = create_async_engine(settings.database_url, poolclass=NullPool)
+    redis: Redis = Redis.from_url(settings.redis_url)
+
+    try:
+        async with (
+            httpx.AsyncClient(timeout=20) as http,
+            async_sessionmaker(engine)() as session,
+        ):
+            # Only needed if the map's file is missing: normally it's on disk already.
+            files = BeatmapFiles(http, RateLimiter(redis), settings.data_dir / "beatmaps")
+            return await analyze_one_replay(session, files, settings.data_dir, replay_id)
     finally:
         await redis.aclose()
         await engine.dispose()
