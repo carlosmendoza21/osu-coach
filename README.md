@@ -57,7 +57,7 @@ every push.
 On Windows, async database code needs a selector event loop (psycopg can't use the
 default one); `tests/conftest.py` sets it for the tests, and the worker task sets it too.
 
-**Unit tests** ([`tests/unit/`](tests/unit), 752 tests): call the code directly with nothing
+**Unit tests** ([`tests/unit/`](tests/unit), 795 tests): call the code directly with nothing
 running. `respx` fakes the osu! token endpoint (and blocks any unmocked request),
 `fakeredis` stands in for Redis, and the rate limiter gets a fake clock, so a 60 s window
 runs instantly.
@@ -192,6 +192,21 @@ no longer reports AR or OD with mods, so there's nothing live to check):
 - Mods that change nothing are allowed; Relax, Autopilot, Auto, Mirror, lazer's custom
   difficulty and Wind Up are refused, naming every one, as are HR with EZ and two speed mods
 
+*Judging a replay* (43), on small maps and presses built by hand (OD 10, CS 4, AR 10):
+- Timing: each window's edge, early presses inside 400 ms as misses, a press 401 ms early
+  ignored (the next one still hits), a late press finding the circle already missed, and
+  circles never pressed or after the replay ends as misses
+- Aim: the cursor must be within the radius (36.4 px hits, 36.6 doesn't), the aim error
+  is the distance from the center, HR flips the map and shrinks the circles
+- Keys: M1/K1 are "left" and M2/K2 "right"; holding is one press, K1 while M1 is held
+  isn't a new press, the other button is, both in one frame are two presses, smoke isn't
+- A press goes to the earliest unjudged circle under the cursor that has appeared;
+  stacked circles are hit in order
+- Note lock: a later circle shakes until the latest earlier one is judged or its time
+  has come, then hitting it misses every earlier circle still waiting (marked forced)
+- Slider heads are judged like circles; spinners are left out for now; maps in file
+  formats before v5 play 24 ms later
+
 *Storing a replay* (28), with real files and a fake session:
 - A new upload keeps the original `.osr` and writes its frames to Parquet, both named by
   the file's SHA-256, then inserts one row and commits; the row holds every header field,
@@ -274,7 +289,7 @@ statements are compiled to Postgres SQL:
 - The response has exactly the public fields; the worker is waited on in a thread with a
   30 s timeout
 
-**Integration tests** ([`tests/integration/`](tests/integration), 146 tests): use real
+**Integration tests** ([`tests/integration/`](tests/integration), 149 tests): use real
 Redis, real time, real processes, and the real osu! API with the credentials in `.env`.
 They skip with the reason if Redis isn't running (`docker compose up -d redis`) or the
 credentials are missing, and clean up their Redis keys even if a check fails.
@@ -377,6 +392,12 @@ removed; other maps' objects are left alone; a mismatch stores nothing; a failur
 storing the objects rolls the map back too; and a real fetch from osu! (needs Redis and
 credentials). `maps_to_fetch` lists a player's osu! standard maps without hit objects:
 not maps already fetched, other modes or other players' maps, and each map once.
+
+*Judging real replays* (3; needs the replays in `data/replays/`, Redis and credentials):
+Day 4's goal. Each replay's map is downloaded and the replay judged: our 300/100/50/miss
+counts equal the official ones osu! wrote into the file, every circle and slider head is
+judged once, and the timing looks like a real player's (mean near 0, UR 30-200). All
+three current replays match exactly (gwb 1186/24/2/9, mrekk 2224/14/0/0 and 2838/18/0/0).
 
 *Storing a replay* (14, Postgres; also run in CI): the row holds the replay exactly
 (play time with its time zone, mods as a list); the same file twice is one row; five
@@ -481,6 +502,13 @@ Both suites were checked against deliberately broken code:
   no radius factor, the radius from the unmodded CS (caught after adding a check), unknown
   mods, HR with EZ or two speed mods allowed, Relax as neutral, and effective AR/OD ignoring
   the speed or using one slope
+- `judge.py` (18 breaks): the press going to the latest circle, a radius 1 px too small, no
+  aim check, no HR flip, holding as pressing, M1 not a left press, smoke as a press, one
+  press per frame, no note lock, no forced misses, late misses not checked before a press,
+  too-early presses as misses, no offset for old formats or one for v5 too, spinners judged
+  as circles, a flipped error sign, and unpressed circles left out. Removing the "not on
+  screen yet" check changes nothing: a circle appears at least 450 ms early and a press
+  more than 400 ms early never counts, so the check only stops the search early
 
 `.gitattributes` marks `.osu` files as binary: git's `\r\n` to `\n` conversion would change
 a map file's MD5 and break the fixtures on other machines.
@@ -512,6 +540,7 @@ src/osu_coach/
   beatmaps.py  fetch one map: details, verified .osu file, hit objects (fetch_beatmap task)
   osrfile.py   parse .osr replays (stable and lazer): header, mods, frames
   difficulty.py  play conditions: mods applied, hit windows, circle radius, approach time
+  judge.py     judge a replay hit by hit (lazer's rules): result, timing, aim, note lock
   replays.py   store an upload (original, Parquet frames, row); fetch the replay's map
   sync.py      save a player and their scores from osu! (upserts, one transaction)
   config.py    settings from env / .env
