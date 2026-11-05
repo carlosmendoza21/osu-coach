@@ -35,7 +35,7 @@ def session(engine: Engine) -> Iterator[Session]:
         yield s
         s.rollback()
     with engine.begin() as conn:  # each test starts from empty tables
-        conn.execute(text("TRUNCATE players, scores, beatmaps, hit_objects"))
+        conn.execute(text("TRUNCATE players, scores, beatmaps, hit_objects, replays, hit_results"))
 
 
 # The rows come from the same mapping the sync uses, so these tests cover it too.

@@ -52,7 +52,7 @@ async def db(test_url: URL) -> AsyncIterator[AsyncEngine]:
 def empty_tables(engine: Engine) -> Iterator[None]:
     yield
     with engine.begin() as conn:
-        conn.execute(text("TRUNCATE players, scores, beatmaps, hit_objects"))
+        conn.execute(text("TRUNCATE players, scores, beatmaps, hit_objects, replays, hit_results"))
 
 
 async def fetch(db: AsyncEngine, osu: Any = None, files: Any = None) -> FetchResult:

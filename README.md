@@ -57,7 +57,7 @@ every push.
 On Windows, async database code needs a selector event loop (psycopg can't use the
 default one); `tests/conftest.py` sets it for the tests, and the worker task sets it too.
 
-**Unit tests** ([`tests/unit/`](tests/unit), 795 tests): call the code directly with nothing
+**Unit tests** ([`tests/unit/`](tests/unit), 817 tests): call the code directly with nothing
 running. `respx` fakes the osu! token endpoint (and blocks any unmocked request),
 `fakeredis` stands in for Redis, and the rate limiter gets a fake clock, so a 60 s window
 runs instantly.
@@ -207,6 +207,18 @@ no longer reports AR or OD with mods, so there's nothing live to check):
 - Slider heads are judged like circles; spinners are left out for now; maps in file
   formats before v5 play 24 ms later
 
+*Analysis* (22), with hand-made judgements and a fake session:
+- UR is 10 x the population spread of the timing errors (two hits 5 ms either side give
+  50, not 70.7); the mean error shows early/late bias; the aim error is the mean distance
+  from circle centers. Only hits count: a miss, even an early press, has no timing
+- With DT or HT, timing is in real time (DT's 15 ms of song time is 10 ms); aim isn't
+- Fewer than two hits give no stats rather than a meaningless spread
+- Storing: delete this replay's results, insert one row per judgement (an early miss keeps
+  its press; the note-lock flag is kept), in batches of 1000 (none for zero rows), then the
+  summary on the replay with the database's time, then one commit
+- Results by pattern: every result listed (0 where none), joined through the map the
+  replay was analyzed against, object by object, for this replay only
+
 *Storing a replay* (28), with real files and a fake session:
 - A new upload keeps the original `.osr` and writes its frames to Parquet, both named by
   the file's SHA-256, then inserts one row and commits; the row holds every header field,
@@ -289,7 +301,7 @@ statements are compiled to Postgres SQL:
 - The response has exactly the public fields; the worker is waited on in a thread with a
   30 s timeout
 
-**Integration tests** ([`tests/integration/`](tests/integration), 149 tests): use real
+**Integration tests** ([`tests/integration/`](tests/integration), 160 tests): use real
 Redis, real time, real processes, and the real osu! API with the credentials in `.env`.
 They skip with the reason if Redis isn't running (`docker compose up -d redis`) or the
 credentials are missing, and clean up their Redis keys even if a check fails.
@@ -398,6 +410,13 @@ Day 4's goal. Each replay's map is downloaded and the replay judged: our 300/100
 counts equal the official ones osu! wrote into the file, every circle and slider head is
 judged once, and the timing looks like a real player's (mean near 0, UR 30-200). All
 three current replays match exactly (gwb 1186/24/2/9, mrekk 2224/14/0/0 and 2838/18/0/0).
+
+*Analysis* (11, Postgres; also run in CI), on map 22423 and replays built on it: results
+and summary stored and read back exactly; analyzing again replaces everything (fewer
+objects, no leftover misses); another replay's results are left alone; an unanalyzed
+replay has empty columns. Deleting a replay deletes its results; an analyzed map can't be
+deleted; results need a replay and are one per object. Results by pattern equal a tally
+of the stored objects' labels, cover every object, and are empty before analysis.
 
 *Storing a replay* (14, Postgres; also run in CI): the row holds the replay exactly
 (play time with its time zone, mods as a list); the same file twice is one row; five
@@ -509,6 +528,13 @@ Both suites were checked against deliberately broken code:
   as circles, a flipped error sign, and unpressed circles left out. Removing the "not on
   screen yet" check changes nothing: a circle appears at least 450 ms early and a press
   more than 400 ms early never counts, so the check only stops the search early
+- `analysis.py` and its migration (22 breaks): a sample spread instead of the population's,
+  misses' timing counted, song time instead of real time or the rate the wrong way, UR or
+  aim from one hit, no delete before inserting or deleting every replay's results, no
+  commit, every batch getting all rows, the last batch dropped, an insert even when empty,
+  the note-lock flag or aim not stored, no analyzed time or map id, updating every
+  replay, the pattern join ignoring the map, the pattern query for every replay, results
+  not filled with 0, and a migration without CASCADE or without the map's foreign key
 
 `.gitattributes` marks `.osu` files as binary: git's `\r\n` to `\n` conversion would change
 a map file's MD5 and break the fixtures on other machines.
@@ -541,6 +567,7 @@ src/osu_coach/
   osrfile.py   parse .osr replays (stable and lazer): header, mods, frames
   difficulty.py  play conditions: mods applied, hit windows, circle radius, approach time
   judge.py     judge a replay hit by hit (lazer's rules): result, timing, aim, note lock
+  analysis.py  a judged replay's UR, timing bias and aim; stored hit by hit; by pattern
   replays.py   store an upload (original, Parquet frames, row); fetch the replay's map
   sync.py      save a player and their scores from osu! (upserts, one transaction)
   config.py    settings from env / .env

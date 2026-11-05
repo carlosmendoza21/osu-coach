@@ -176,3 +176,30 @@ class Replay(Base):
     # The frames' Parquet file, relative to the data folder (it moves between machines).
     frames_path: Mapped[str] = mapped_column(String(255))
     parsed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    # Set once the replay is analyzed (see osu_coach.analysis); null until then.
+    # The map it was judged against. No ondelete, like scores: deleting an analyzed map
+    # is almost certainly a mistake.
+    beatmap_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("beatmaps.id"))
+    unstable_rate: Mapped[float | None] = mapped_column(Float)  # 10 x the timing's spread
+    mean_error_ms: Mapped[float | None] = mapped_column(Float)  # negative: early on average
+    mean_aim_error_px: Mapped[float | None] = mapped_column(Float)  # from circle centers
+    analyzed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class ReplayHit(Base):
+    """How one circle or slider head of a replay was hit (see osu_coach.judge)."""
+
+    __tablename__ = "hit_results"
+
+    # CASCADE: the results belong to the replay; deleting it removes them.
+    replay_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("replays.id", ondelete="CASCADE"), primary_key=True
+    )
+    # The object's place in the map: joins hit_objects on (replays.beatmap_id, idx).
+    idx: Mapped[int] = mapped_column(Integer, primary_key=True)
+    result: Mapped[str] = mapped_column(String(4))  # "300", "100", "50" or "miss"
+    hit_ms: Mapped[int | None] = mapped_column(Integer)  # when it was hit; null if never
+    error_ms: Mapped[int | None] = mapped_column(Integer)  # negative is early
+    aim_error_px: Mapped[float | None] = mapped_column(Float)  # cursor to circle center
+    forced: Mapped[bool]  # missed because a later circle was hit first (note lock)

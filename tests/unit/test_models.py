@@ -41,7 +41,8 @@ def field_allows_none(model: type[BaseModel], field: str) -> bool:
 
 
 def test_tables() -> None:
-    assert set(Base.metadata.tables) == {"players", "scores", "beatmaps", "hit_objects", "replays"}
+    tables = {"players", "scores", "beatmaps", "hit_objects", "replays", "hit_results"}
+    assert set(Base.metadata.tables) == tables
 
 
 @pytest.mark.parametrize(("table", "key"), [(PLAYERS, "osu_id"), (SCORES, "id"), (BEATMAPS, "id")])
