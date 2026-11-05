@@ -57,7 +57,7 @@ every push.
 On Windows, async database code needs a selector event loop (psycopg can't use the
 default one); `tests/conftest.py` sets it for the tests, and the worker task sets it too.
 
-**Unit tests** ([`tests/unit/`](tests/unit), 678 tests): call the code directly with nothing
+**Unit tests** ([`tests/unit/`](tests/unit), 752 tests): call the code directly with nothing
 running. `respx` fakes the osu! token endpoint (and blocks any unmocked request),
 `fakeredis` stands in for Redis, and the rate limiter gets a fake clock, so a 60 s window
 runs instantly.
@@ -179,6 +179,18 @@ can be set:
   or unreadable lazer block or mod list, and no frames. Compressed data that unpacks past
   16 MB (frames) or 1 MB (lazer's block) is refused while unpacking: a 20 MB bomb never
   uses more than LZMA's own 8 MB buffer
+
+*Play conditions* (74), against osu!'s published values (the osu! wiki's tables; osu!'s API
+no longer reports AR or OD with mods, so there's nothing live to check):
+- Hit windows by OD (80 - 6 OD, 140 - 8 OD, 200 - 10 OD), rounded down to whole ms minus
+  half a ms as lazer does; a press's result at each window's edge, early presses inside
+  400 ms counting as misses, and presses too early or too late not counting at all
+- HR (CS x1.3, the rest x1.4, capped at 10, map flipped) and EZ (halved), with the radius
+  following the new CS; DT/NC and HT/DC change the speed but not the windows in song time
+- Effective AR and OD with speed mods: AR 10 + DT = 11, OD 10 + DT = 11.11, AR 9 + DT =
+  10.33, HT's AR 10 = 9; approach times and circle radii from the wiki's tables
+- Mods that change nothing are allowed; Relax, Autopilot, Auto, Mirror, lazer's custom
+  difficulty and Wind Up are refused, naming every one, as are HR with EZ and two speed mods
 
 *Storing a replay* (28), with real files and a fake session:
 - A new upload keeps the original `.osr` and writes its frames to Parquet, both named by
@@ -463,6 +475,12 @@ Both suites were checked against deliberately broken code:
   hit objects or lowercasing, no check before or after fetching, ignoring every refused
   rename, a checksum not lowercased or not checked as an MD5 (or with `match` instead of
   `fullmatch`), and the task without `MapChangedError` in `throws=`
+- `difficulty.py` (20 breaks): one slope for the whole 0-10 scale, windows not rounded down
+  or without the half ms, strict window edges, late presses as misses or no early misses,
+  HR uncapped or with CS x1.4, EZ ignored, no HR flip, DT at 1.33x, windows scaled by speed,
+  no radius factor, the radius from the unmodded CS (caught after adding a check), unknown
+  mods, HR with EZ or two speed mods allowed, Relax as neutral, and effective AR/OD ignoring
+  the speed or using one slope
 
 `.gitattributes` marks `.osu` files as binary: git's `\r\n` to `\n` conversion would change
 a map file's MD5 and break the fixtures on other machines.
@@ -493,6 +511,7 @@ src/osu_coach/
   patterns.py  per-object features: slider end times, spacing, angle, pattern labels
   beatmaps.py  fetch one map: details, verified .osu file, hit objects (fetch_beatmap task)
   osrfile.py   parse .osr replays (stable and lazer): header, mods, frames
+  difficulty.py  play conditions: mods applied, hit windows, circle radius, approach time
   replays.py   store an upload (original, Parquet frames, row); fetch the replay's map
   sync.py      save a player and their scores from osu! (upserts, one transaction)
   config.py    settings from env / .env
