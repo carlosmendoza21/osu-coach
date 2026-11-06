@@ -18,7 +18,7 @@ import pytest
 from osu_coach.api import replays as api
 from osu_coach.db import get_session
 from osu_coach.main import create_app
-from osu_coach.models import Replay
+from osu_coach.models import Beatmap, Replay
 from osu_coach.osrfile import ReplayFileError
 from osu_coach.replays import StoredReplay
 from tests.osrdata import CHECKSUM, PLAYED_AT
@@ -351,3 +351,151 @@ def test_each_chain_gets_its_own_map_job_id(sent: list[Any]) -> None:
 
 def test_queueing_uses_the_worker() -> None:
     assert api.get_queue() is api.queue_via_worker
+
+
+# ---------- GET /replays/{id} ----------
+
+
+def beatmap_row() -> Beatmap:
+    return Beatmap(
+        id=4767844, beatmapset_id=2287992, artist="Ardolf", title="Split EX",
+        creator="mapper", version="REALITIES COLLIDE", star_rating=7.91, ar=9.7, od=9.5,
+        cs=3, hp=5, bpm=200, length_s=184, checksum=CHECKSUM,
+    )  # fmt: skip
+
+
+class DetailSession:
+    """Loads the replay and its map by id, or the map by checksum, recording how."""
+
+    def __init__(self, replay: Replay | None, beatmap: Beatmap | None) -> None:
+        self.replay, self.beatmap = replay, beatmap
+        self.calls: list[str] = []
+
+    async def get(self, model: type, key: int) -> Any:
+        self.calls.append(f"get {model.__name__} {key}")
+        return self.replay if model is Replay else self.beatmap
+
+    async def scalar(self, statement: Any) -> Beatmap | None:
+        self.calls.append("map by checksum")
+        return self.beatmap
+
+
+class DetailEnv:
+    def __init__(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        self.session = DetailSession(replay_row(), beatmap_row())
+        self.judged: dict[str, int] | None = {"300": 1186, "100": 24, "50": 2, "miss": 9}
+        self.queries: list[str] = []
+
+        async def judged_counts(session: Any, replay_id: int) -> dict[str, int] | None:
+            self.queries.append(f"judged {replay_id}")
+            return self.judged
+
+        async def by_pattern(session: Any, replay_id: int) -> dict[str, dict[str, int]]:
+            self.queries.append(f"by pattern {replay_id}")
+            return {"stream": {"300": 532, "100": 14, "50": 2, "miss": 8}}
+
+        monkeypatch.setattr(api, "judged_counts", judged_counts)
+        monkeypatch.setattr(api, "results_by_pattern", by_pattern)
+
+    def analyzed(self) -> None:
+        row = replay_row(analyzed=True)
+        row.beatmap_id = 4767844
+        self.session.replay = row
+
+    async def get(self, path: str = "/replays/1") -> httpx.Response:
+        app = create_app()
+
+        async def session() -> AsyncIterator[DetailSession]:
+            yield self.session
+
+        app.dependency_overrides[get_session] = session
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            return await client.get(path)
+
+
+@pytest.fixture
+def denv(monkeypatch: pytest.MonkeyPatch) -> DetailEnv:
+    return DetailEnv(monkeypatch)
+
+
+async def test_an_analyzed_replay(denv: DetailEnv) -> None:
+    denv.analyzed()
+
+    resp = await denv.get()
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "analyzed"
+    assert body["judged"] == {"300": 1186, "100": 24, "50": 2, "miss": 9}
+    assert body["matches_official"] is True  # the row's official counts are the same
+    assert body["by_pattern"] == {"stream": {"300": 532, "100": 14, "50": 2, "miss": 8}}
+    assert body["replay"]["unstable_rate"] == 95.5
+    assert body["beatmap"] == {
+        "id": 4767844, "beatmapset_id": 2287992, "artist": "Ardolf", "title": "Split EX",
+        "creator": "mapper", "version": "REALITIES COLLIDE", "star_rating": 7.91, "ar": 9.7,
+        "od": 9.5, "cs": 3.0, "hp": 5.0, "bpm": 200.0, "length_s": 184,
+    }  # fmt: skip
+    # The map it was analyzed against, by id.
+    assert denv.session.calls == ["get Replay 1", "get Beatmap 4767844"]
+    assert denv.queries == ["judged 1", "by pattern 1"]
+
+
+@pytest.mark.parametrize(
+    ("judged", "matches"),
+    [
+        ({"300": 1186, "100": 24, "50": 2, "miss": 9}, True),
+        ({"300": 1186, "100": 25, "50": 1, "miss": 9}, False),  # one 50 judged a 100
+        ({"300": 1185, "100": 24, "50": 2, "miss": 10}, False),
+    ],
+)
+async def test_matches_official(denv: DetailEnv, judged: dict[str, int], matches: bool) -> None:
+    denv.analyzed()
+    denv.judged = judged
+
+    assert (await denv.get()).json()["matches_official"] is matches
+
+
+async def test_a_pending_replay(denv: DetailEnv) -> None:
+    resp = await denv.get()
+
+    body = resp.json()
+    assert (body["status"], body["judged"], body["matches_official"]) == ("pending", None, None)
+    assert body["by_pattern"] == {}
+    assert body["replay"]["unstable_rate"] is None
+    assert denv.queries == []  # no results to look up yet
+    # Not analyzed: the stored map with the replay's exact file, by checksum.
+    assert body["beatmap"]["id"] == 4767844
+    assert denv.session.calls == ["get Replay 1", "map by checksum"]
+
+
+async def test_a_pending_replay_without_its_map(denv: DetailEnv) -> None:
+    denv.session.beatmap = None
+
+    body = (await denv.get()).json()
+
+    assert (body["status"], body["beatmap"]) == ("pending", None)
+
+
+async def test_an_unknown_replay_is_404(denv: DetailEnv) -> None:
+    denv.session.replay = None
+
+    resp = await denv.get("/replays/999")
+
+    assert resp.status_code == 404
+    assert resp.json() == {"detail": "replay 999 not found"}
+    assert denv.session.calls == ["get Replay 999"] and denv.queries == []
+
+
+@pytest.mark.parametrize("path", ["/replays/abc", "/replays/1.5"])
+async def test_an_id_that_isnt_a_number_is_422(denv: DetailEnv, path: str) -> None:
+    resp = await denv.get(path)
+
+    assert resp.status_code == 422
+    assert denv.session.calls == []
+
+
+def test_get_replay_is_documented() -> None:
+    operation = create_app().openapi()["paths"]["/replays/{replay_id}"]["get"]
+
+    assert set(operation["responses"]) == {"200", "404", "422"}

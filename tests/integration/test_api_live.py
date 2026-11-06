@@ -190,3 +190,16 @@ def test_uploading_a_replay_analyzes_it(api: httpx.Client) -> None:
     assert (again["map_job_id"], again["analysis_job_id"]) == (None, None)
     assert again["replay"]["unstable_rate"] == pytest.approx(60, abs=0.1)
     assert again["replay"]["analyzed_at"] is not None
+
+    # And the replay page's data: the analysis with its map and results by pattern.
+    detail = api.get(f"/replays/{replay_id}").json()
+    assert detail["status"] == "analyzed"
+    assert detail["beatmap"]["title"] == "Tori no Uta -Ethereal House Mix-"
+    assert sum(detail["judged"].values()) == judged
+    assert sum(sum(c.values()) for c in detail["by_pattern"].values()) == judged
+
+
+def test_an_unknown_replay_is_404(api: httpx.Client) -> None:
+    resp = api.get("/replays/999999999")
+
+    assert resp.status_code == 404

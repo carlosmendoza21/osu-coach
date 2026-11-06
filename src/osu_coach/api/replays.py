@@ -1,21 +1,23 @@
-"""POST /replays/upload: store an .osr replay, then fetch its map and analyze it in the
-background."""
+"""Replays: POST /replays/upload stores an .osr replay, then fetches its map and analyzes
+it in the background; GET /replays/{id} shows it with its analysis."""
 
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Literal
 
 from celery import chain
 from fastapi import APIRouter, Depends, HTTPException, Response, UploadFile
 from pydantic import BaseModel, ConfigDict
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from osu_coach.analysis import judged_counts, results_by_pattern
 from osu_coach.config import get_settings
 from osu_coach.db import get_session
-from osu_coach.models import Replay
+from osu_coach.models import Beatmap, Replay
 from osu_coach.osrfile import ReplayFileError
 from osu_coach.replays import store_replay, stored_map
 from osu_coach.worker import analyze_replay, fetch_replay_map
@@ -60,6 +62,38 @@ class UploadResponse(BaseModel):
     # The job analyzing the replay (after the map job, if there is one); None if the
     # replay was analyzed before.
     analysis_job_id: str | None
+
+
+class BeatmapOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    beatmapset_id: int
+    artist: str
+    title: str
+    creator: str
+    version: str  # the difficulty name, e.g. "Hard"
+    star_rating: float
+    ar: float
+    od: float
+    cs: float
+    hp: float
+    bpm: float
+    length_s: int
+
+
+class ReplayDetail(BaseModel):
+    replay: ReplayOut
+    # The map the replay was played on, once it's stored (that exact version).
+    beatmap: BeatmapOut | None
+    # "pending" until the analysis is stored; the fields below are empty until then.
+    status: Literal["pending", "analyzed"]
+    # Our own 300/100/50/miss counts, and whether they equal the ones osu! wrote into
+    # the file: the check that the analysis is right.
+    judged: dict[str, int] | None
+    matches_official: bool | None
+    # {pattern: {result: count}}, e.g. {"stream": {"300": 532, ..., "miss": 8}}
+    by_pattern: dict[str, dict[str, int]]
 
 
 # ---------- Dependencies: tests replace these ----------
@@ -142,4 +176,41 @@ async def upload_replay(
         created=stored.created,
         map_job_id=jobs.map_job_id if jobs else None,
         analysis_job_id=jobs.analysis_job_id if jobs else None,
+    )
+
+
+@router.get(
+    "/replays/{replay_id}",
+    response_model=ReplayDetail,
+    responses={404: {"description": "No replay has this id"}},
+)
+async def get_replay(
+    replay_id: int, session: Annotated[AsyncSession, Depends(get_session)]
+) -> ReplayDetail:
+    replay = await session.get(Replay, replay_id)
+    if replay is None:
+        raise HTTPException(404, f"replay {replay_id} not found")
+
+    # The map it was analyzed against, or before that, the stored map with its file.
+    if replay.beatmap_id is not None:
+        beatmap = await session.get(Beatmap, replay.beatmap_id)
+    else:
+        stmt = select(Beatmap).where(Beatmap.checksum == replay.beatmap_checksum)
+        beatmap = await session.scalar(stmt)
+
+    analyzed = replay.analyzed_at is not None
+    judged = await judged_counts(session, replay_id) if analyzed else None
+    official = {
+        "300": replay.count_300,
+        "100": replay.count_100,
+        "50": replay.count_50,
+        "miss": replay.count_miss,
+    }
+    return ReplayDetail(
+        replay=ReplayOut.model_validate(replay),
+        beatmap=BeatmapOut.model_validate(beatmap) if beatmap is not None else None,
+        status="analyzed" if analyzed else "pending",
+        judged=judged,
+        matches_official=judged == official if judged is not None else None,
+        by_pattern=await results_by_pattern(session, replay_id) if analyzed else {},
     )

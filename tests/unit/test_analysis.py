@@ -23,6 +23,7 @@ from osu_coach.analysis import (
     ReplayNotFoundError,
     ReplayStats,
     analyze_replay,
+    judged_counts,
     replay_stats,
     results_by_pattern,
     store_analysis,
@@ -399,3 +400,22 @@ async def test_unsupported_mods_store_nothing(aenv: AnalyzeEnv) -> None:
     with pytest.raises(UnsupportedModsError, match="RX"):
         await aenv.run()
     assert aenv.stored == []
+
+
+# ---------- judged_counts ----------
+
+
+async def test_judged_counts() -> None:
+    session = QuerySession([("300", 1186), ("100", 24), ("miss", 9)])  # type: ignore[list-item]
+
+    counts = await judged_counts(cast(AsyncSession, session), 1)
+
+    assert counts == {"300": 1186, "100": 24, "50": 0, "miss": 9}  # 0 where none
+    sql = " ".join(str(session.statement.compile(dialect=PG)).split())
+    assert "FROM hit_results WHERE hit_results.replay_id = " in sql
+    assert "GROUP BY hit_results.result" in sql
+
+
+async def test_judged_counts_without_results() -> None:
+    # Not analyzed: no counts at all, rather than four zeros that look like a result.
+    assert await judged_counts(cast(AsyncSession, QuerySession([])), 1) is None

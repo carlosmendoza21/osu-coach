@@ -18,6 +18,10 @@ docker compose up --build
   map (if needed) and analyzes it hit by hit: UR, timing bias, aim error, results by
   pattern. `201` for a new file, `200` for one uploaded before (with its analysis once
   done), `422` for a file that isn't a valid replay, `413` for one that's too large
+- `GET /replays/{id}`: a replay with its map and analysis: our 300/100/50/miss counts and
+  whether they match osu!'s, UR, timing bias, aim error, and results by pattern (jump,
+  stream, slider, other). `"pending"` with empty analysis until it's done; `404` for an
+  unknown id
 - Postgres 16 + pgvector on `5432`, Redis on `6379`
 - The `migrate` service runs `alembic upgrade head` before the API and worker start.
 
@@ -58,7 +62,7 @@ every push.
 On Windows, async database code needs a selector event loop (psycopg can't use the
 default one); `tests/conftest.py` sets it for the tests, and the worker task sets it too.
 
-**Unit tests** ([`tests/unit/`](tests/unit), 828 tests): call the code directly with nothing
+**Unit tests** ([`tests/unit/`](tests/unit), 840 tests): call the code directly with nothing
 running. `respx` fakes the osu! token endpoint (and blocks any unmocked request),
 `fakeredis` stands in for Redis, and the rate limiter gets a fake clock, so a 60 s window
 runs instantly.
@@ -208,7 +212,7 @@ no longer reports AR or OD with mods, so there's nothing live to check):
 - Slider heads are judged like circles; spinners are left out for now; maps in file
   formats before v5 play 24 ms later
 
-*Analysis* (29), with hand-made judgements and a fake session:
+*Analysis* (31), with hand-made judgements and a fake session:
 - UR is 10 x the population spread of the timing errors (two hits 5 ms either side give
   50, not 70.7); the mean error shows early/late bias; the aim error is the mean distance
   from circle centers. Only hits count: a miss, even an early press, has no timing
@@ -225,6 +229,8 @@ no longer reports AR or OD with mods, so there's nothing live to check):
   osu! also counts the 3 spinners, true when the header agrees; skipping a stacked note
   lets the next tap hit it, a 50, and misses the next). DT's speed reaches the stats, HR
   flips the map; an unknown replay, a map not stored yet, or RX store nothing
+- Our counts from the stored results: 0 where a result never happened, and none at all
+  (not four zeros) for a replay not analyzed yet
 
 *Storing a replay* (28), with real files and a fake session:
 - A new upload keeps the original `.osr` and writes its frames to Parquet, both named by
@@ -254,6 +260,15 @@ no longer reports AR or OD with mods, so there's nothing live to check):
 - A bad file is `422` with the parser's reason and nothing else happens; a file of exactly
   4 MB is accepted and one byte more is `413` without parsing; a missing file (or the
   wrong field name) is `422`; the documented responses are 200, 201, 413 and 422
+
+*Showing a replay* (10, `GET /replays/{id}`), with a fake session and replaced queries:
+- Analyzed: the play, its stats, our counts, `matches_official` (false if any count
+  differs, such as one 50 judged a 100), results by pattern, and the map it was analyzed
+  against, loaded by id
+- Pending: no counts or patterns, and nothing looked up for them; the map with the
+  replay's exact file, by checksum, or none if it isn't stored yet
+- An unknown id is `404` and nothing else is looked up; an id that isn't a number is `422`;
+  the documented responses are 200, 404 and 422
 
 *Worker tasks* (2): the tasks' names, and the errors declared as expected (`throws=`), so
 Celery logs a missing player, a taiko map, a changed map, an unknown replay, a map not
@@ -313,7 +328,7 @@ statements are compiled to Postgres SQL:
 - The response has exactly the public fields; the worker is waited on in a thread with a
   30 s timeout
 
-**Integration tests** ([`tests/integration/`](tests/integration), 166 tests): use real
+**Integration tests** ([`tests/integration/`](tests/integration), 169 tests): use real
 Redis, real time, real processes, and the real osu! API with the credentials in `.env`.
 They skip with the reason if Redis isn't running (`docker compose up -d redis`) or the
 credentials are missing, and clean up their Redis keys even if a check fails.
@@ -423,7 +438,7 @@ counts equal the official ones osu! wrote into the file, every circle and slider
 judged once, and the timing looks like a real player's (mean near 0, UR 30-200). All
 three current replays match exactly (gwb 1186/24/2/9, mrekk 2224/14/0/0 and 2838/18/0/0).
 
-*Analysis* (15, Postgres; also run in CI), on map 22423 and replays built on it: results
+*Analysis* (17, Postgres; also run in CI), on map 22423 and replays built on it: results
 and summary stored and read back exactly; analyzing again replaces everything (fewer
 objects, no leftover misses); another replay's results are left alone; an unanalyzed
 replay has empty columns. Deleting a replay deletes its results; an analyzed map can't be
@@ -432,7 +447,9 @@ of the stored objects' labels, cover every object, and are empty before analysis
 Analyzing a stored replay that plays the map (6 ms either side) with a real session,
 which expires loaded rows on commit as the worker's does: 251 results, UR 60, the map's
 id and analysis time on the replay, the same rows when analyzed twice; a replay whose map
-isn't stored, or no replay at all, is refused.
+isn't stored, or no replay at all, is refused. Our counts are none before analysis and
+exact after; `GET /replays/{id}` against Postgres shows a replay pending (with its map
+already) and then analyzed (251 300s, matching osu!, UR 60), and `404` for no replay.
 
 *Storing a replay* (14, Postgres; also run in CI): the row holds the replay exactly
 (play time with its time zone, mods as a list); the same file twice is one row; five
@@ -444,7 +461,7 @@ osu! and file store, map 22423) is fetched with its 254 objects, not fetched aga
 stored, found in either letter case only with its hit objects, and a newer version is
 stored but refused as the replay's map.
 
-*Whole app* (8, the full stack running): over real HTTP, `/health`; peppy's profile with 50
+*Whole app* (9, the full stack running): over real HTTP, `/health`; peppy's profile with 50
 best plays sorted by pp; a repeat request served without a new sync; `404` for an unknown
 player; the endpoint in the OpenAPI docs. Day 3's goal: uploading a replay on map 22423
 (whose objects are removed first) stores the replay and queues the map, the worker stores
@@ -452,6 +469,8 @@ all 254 objects, and uploading again is `200` with the same replay and nothing q
 bad file is `422`. Day 4's goal end to end: a replay playing map 22423 is uploaded with the
 map's objects removed; the map is fetched and then the replay analyzed by the worker (UR
 60, all 251 results stored), and uploading again returns the analysis and queues nothing.
+`GET /replays/{id}` then shows it analyzed with its map and every object in its results by
+pattern; an unknown replay is `404`.
 
 *Worker* (9, the full stack running): `fetch_beatmap` stores map 22423's 254 objects and
 refuses a taiko map. `fetch_replay_map` finds map 22423 by its checksum (and doesn't fetch
@@ -561,6 +580,10 @@ Both suites were checked against deliberately broken code:
   `ReplayNotFoundError`, analyzed replays queued again, the map always or never fetched,
   the chain in the wrong order or not a chain, the map job's id not given to it or used as
   the analysis id, and the stats left out of the response
+- `GET /replays/{id}` and `judged_counts` (13 breaks): no `404`, the map always by checksum
+  or always by id, always "analyzed", counts or patterns looked up while pending, matching
+  whenever counted, the official 100s read from the 50s, the map left out, the `404` not
+  documented, counts not filled with 0, zeros instead of none, and every replay's counts
 
 `.gitattributes` marks `.osu` files as binary: git's `\r\n` to `\n` conversion would change
 a map file's MD5 and break the fixtures on other machines.
@@ -580,7 +603,7 @@ Each makes at least one test fail.
 ```
 src/osu_coach/
   main.py      FastAPI app
-  api/         routers: /health, /players/{username}, /replays/upload
+  api/         routers: /health, /players/{username}, /replays/upload, /replays/{id}
   osu/auth.py  osu! API token (client credentials), cached in Redis
   osu/ratelimiter.py  shared rate limit for osu! requests (sliding window in Redis)
   osu/retry.py        retries for temporary failures (backoff, jitter, Retry-After)

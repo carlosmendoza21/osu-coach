@@ -99,6 +99,22 @@ async def store_analysis(
     await session.commit()
 
 
+async def judged_counts(session: AsyncSession, replay_id: int) -> dict[str, int] | None:
+    """Our 300/100/50/miss counts for an analyzed replay, from its stored results.
+
+    None if it has no stored results (not analyzed yet).
+    """
+    stmt = (
+        select(ReplayHit.result, func.count())
+        .where(ReplayHit.replay_id == replay_id)
+        .group_by(ReplayHit.result)
+    )
+    found = {result: count for result, count in await session.execute(stmt)}
+    if not found:
+        return None
+    return {r: found.get(r, 0) for r in ("300", "100", "50", "miss")}
+
+
 async def results_by_pattern(session: AsyncSession, replay_id: int) -> dict[str, dict[str, int]]:
     """How each pattern (jump, stream, slider...) went: {pattern: {result: count}}.
 

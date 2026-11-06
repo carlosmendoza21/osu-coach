@@ -8,25 +8,29 @@ tests/integration/test_replays_live.py, whose fixtures these share.
 """
 
 from collections import Counter
-from collections.abc import Collection
+from collections.abc import AsyncIterator, Collection
 from pathlib import Path
 from typing import cast
 
+import httpx
 import pytest
 from sqlalchemy import Engine, text
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from osu_coach.analysis import (
     MapNotStoredError,
     ReplayNotFoundError,
     ReplayStats,
     analyze_replay,
+    judged_counts,
     replay_stats,
     results_by_pattern,
     store_analysis,
 )
+from osu_coach.db import get_session
 from osu_coach.judge import Judgement
+from osu_coach.main import create_app
 from osu_coach.osu.files import BeatmapFiles
 from osu_coach.osufile import parse_osu
 from tests.integration.test_replays_live import (
@@ -300,3 +304,49 @@ async def test_a_replay_whose_map_isnt_stored(db: AsyncEngine, tmp_path: Path) -
 async def test_an_unknown_replay(db: AsyncEngine, tmp_path: Path) -> None:
     with pytest.raises(ReplayNotFoundError):
         await run_analysis(db, tmp_path, 999)
+
+
+# ---------- judged_counts and GET /replays/{id} ----------
+
+
+async def test_judged_counts(db: AsyncEngine, tmp_path: Path) -> None:
+    replay_id = await setup(db, tmp_path)
+    async with async_sessionmaker(db)() as session:
+        assert await judged_counts(session, replay_id) is None  # not analyzed yet
+
+    await analyze(db, replay_id, judgements(missed={1, 2, 3}))
+    async with async_sessionmaker(db)() as session:
+        assert await judged_counts(session, replay_id) == {
+            "300": OBJECTS - 3, "100": 0, "50": 0, "miss": 3,
+        }  # fmt: skip
+
+
+async def get_replay(db: AsyncEngine, replay_id: int) -> httpx.Response:
+    app = create_app()
+
+    async def session() -> AsyncIterator[AsyncSession]:
+        async with async_sessionmaker(db)() as s:
+            yield s
+
+    app.dependency_overrides[get_session] = session
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        return await client.get(f"/replays/{replay_id}")
+
+
+async def test_get_replay_against_postgres(db: AsyncEngine, tmp_path: Path) -> None:
+    replay_id = await played_replay(db, tmp_path)
+
+    pending = (await get_replay(db, replay_id)).json()
+    assert (pending["status"], pending["judged"], pending["by_pattern"]) == ("pending", None, {})
+    assert pending["beatmap"]["id"] == 22423  # stored already: found by checksum
+
+    await run_analysis(db, tmp_path, replay_id)
+    body = (await get_replay(db, replay_id)).json()
+
+    assert body["status"] == "analyzed"
+    assert body["judged"] == {"300": JUDGED, "100": 0, "50": 0, "miss": 0}
+    assert body["matches_official"] is True
+    assert body["replay"]["unstable_rate"] == pytest.approx(60, abs=0.1)
+    assert sum(c["300"] for c in body["by_pattern"].values()) == JUDGED
+    assert (await get_replay(db, 999)).status_code == 404
