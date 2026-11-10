@@ -1,0 +1,50 @@
+:root {
+  --text: #1f1d24;
+  --muted: #6b6375;
+  --bg: #fff;
+  --ok: #1a7f37;
+  --bad: #c62828;
+  --accent: #ff66aa; /* osu! pink */
+
+  font: 16px/1.5 system-ui, 'Segoe UI', Roboto, sans-serif;
+  color: var(--text);
+  background: var(--bg);
+  color-scheme: light dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --text: #f3f1f6;
+    --muted: #a9a3b3;
+    --bg: #17151c;
+    --ok: #4ac26b;
+    --bad: #ff6b6b;
+  }
+}
+
+body {
+  margin: 0;
+}
+
+main {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 2rem 1rem;
+}
+
+h1 {
+  color: var(--accent);
+  margin-top: 0;
+}
+
+.api-status {
+  color: var(--muted);
+}
+
+.api-status.ok {
+  color: var(--ok);
+}
+
+.api-status.down {
+  color: var(--bad);
+}

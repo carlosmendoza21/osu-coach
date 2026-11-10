@@ -48,6 +48,29 @@ New migration after changing `src/osu_coach/models.py`:
 uv run alembic revision --autogenerate -m "describe change"
 ```
 
+### Frontend
+
+React + TypeScript, built with Vite, in [`frontend/`](frontend). With the API running
+(`docker compose up -d`), start the dev server at http://localhost:5173:
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+The dev server forwards `/api/...` to the API on port 8000 (`API_URL` to change it), so
+the page and the API share one address. Checks, as in CI's frontend job:
+
+```bash
+npm run lint
+npm run typecheck
+npm test
+npm run build
+```
+
+`npm run test:live` also calls the running API (see Testing).
+
 ## Testing
 
 ```bash
@@ -481,6 +504,27 @@ it again, in either letter case), and fails with `OsuNotFoundError` for an unkno
 peppy's summary, repeated syncs don't duplicate rows, and an unknown player fails the task
 with `OsuNotFoundError`. It writes to the dev database, like the app.
 
+**Frontend tests** ([`frontend/`](frontend), Vitest; also run in CI):
+
+*Unit* (28, `npm test`), with `fetch` replaced:
+- `api.ts`: each call's URL, under the proxied `/api`, with player names escaped (a space,
+  a slash or a `?` can't break the path); an upload posts the file as the `file` form
+  field, without a hand-set Content-Type (the browser adds multipart's boundary); the JSON
+  comes back as it is; 2xx is success
+- Errors: FastAPI's `detail` string, or the first field error's message, becomes an
+  `ApiError` with the status; a proxy's HTML error page or another body gives the status
+  text, and with none, "request failed (500)"; a network failure passes through
+- The page: its title, "Checking the API..." until the answer, one request to
+  `/api/health`, then "API connected", or "API unreachable" for an answer other than ok, a
+  proxy error or no answer at all
+
+*Live* (5, `npm run test:live`; needs the API running, skips otherwise): a real Vite dev
+server is started with `vite.config.ts`, and `api.ts` calls the API through its proxy:
+`/health` answers; an unknown replay is the API's `404` with its reason; an upload reaches
+the parser (so the form field name is right); peppy's profile and plays have exactly the
+fields `types.ts` declares, no more and no fewer; and a real replay from `data/replays/`
+uploads, with its detail's fields as declared and our counts matching osu!'s.
+
 Both suites were checked against deliberately broken code:
 - `auth.py`: removing the expiry margin, the `400`/`401` check, or the cache read, sending
   the masked secret, or putting the reply in the error message
@@ -584,6 +628,13 @@ Both suites were checked against deliberately broken code:
   or always by id, always "analyzed", counts or patterns looked up while pending, matching
   whenever counted, the official 100s read from the 50s, the map left out, the `404` not
   documented, counts not filled with 0, zeros instead of none, and every replay's counts
+- The frontend (13 breaks): names not escaped, the wrong upload field name, a hand-set
+  Content-Type, error statuses not checked, FastAPI's `detail` or field errors ignored, no
+  message without a status text, `ApiError` without its name, no `/api` prefix, the
+  health answer not checked, failures not caught, and the proxy keeping the `/api` prefix
+  (caught only by the live tests, which use the real proxy). Not ignoring an answer that
+  arrives after the page is gone changes nothing visible: React 18 dropped its warning
+  for it, so no test can see it; the flag stays as React's recommended pattern
 
 `.gitattributes` marks `.osu` files as binary: git's `\r\n` to `\n` conversion would change
 a map file's MD5 and break the fixtures on other machines.
@@ -625,6 +676,7 @@ src/osu_coach/
   worker.py    Celery app and its tasks: osu_sync, fetch_beatmap, fetch_replay_map,
                analyze_replay
 migrations/    Alembic
+frontend/      React + TypeScript (Vite): src/api.ts calls the API, src/types.ts its responses
 tests/
   unit/        no services needed
   fixtures/osu/  saved real osu! API responses
