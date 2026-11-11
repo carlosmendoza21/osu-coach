@@ -8,16 +8,17 @@ Postgres are in tests/integration/test_players_live.py.
 
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, cast
 
 import httpx
 import pytest
 from celery.exceptions import TimeoutError as CeleryTimeoutError
+from sqlalchemy.dialects import postgresql
 
 from osu_coach.api import players
 from osu_coach.db import get_session
 from osu_coach.main import create_app
-from osu_coach.models import Player, Score
+from osu_coach.models import Beatmap, Player, Score
 from osu_coach.osu.client import OsuApiError, OsuNotFoundError
 from osu_coach.sync import player_values, score_values
 from osu_coach.worker import osu_sync
@@ -89,6 +90,11 @@ class Env:
         monkeypatch.setattr(players, "find_player", find_player)
         monkeypatch.setattr(players, "best_scores", best)
         monkeypatch.setattr(players, "recent_scores", recent)
+
+        async def maps_for(session: Any, beatmap_ids: set[int]) -> dict[int, Any]:
+            return {}
+
+        monkeypatch.setattr(players, "maps_for", maps_for)
 
     async def get(self, path: str) -> httpx.Response:
         app = create_app()
@@ -254,6 +260,7 @@ async def test_response_shape(env: Env) -> None:
         "date",
         "accuracy",
         "passed",
+        "beatmap",
     }
     assert "player_id" not in body["best"][0], "only the response model's fields are public"
 
@@ -296,3 +303,85 @@ async def test_sync_via_worker_waits_for_the_task(monkeypatch: pytest.MonkeyPatc
     assert result["osu_id"] == 2
     assert sent == ["peppy"]
     assert waits == [players.SYNC_TIMEOUT_S]
+
+
+# ---------- Each score's map ----------
+
+
+def map_row(beatmap_id: int) -> Beatmap:
+    return Beatmap(
+        id=beatmap_id, beatmapset_id=3720, artist="Lix", title="Tori no Uta",
+        creator="mapper", version="Hard", star_rating=3.56, ar=7, od=7, cs=5, hp=5,
+        bpm=140, length_s=120, hit_length_s=110, count_circles=1, count_sliders=0,
+        count_spinners=0, checksum=None, status="ranked", mode="osu",
+    )  # fmt: skip
+
+
+async def test_each_score_has_its_map(env: Env, monkeypatch: pytest.MonkeyPatch) -> None:
+    env.stored = player_row(FRESH)
+    asked: list[set[int]] = []
+    ids = {s.beatmap_id for s in [*score_rows(), Score(**score_values(failed_score()))]}
+
+    async def maps_for(session: Any, beatmap_ids: set[int]) -> dict[int, Beatmap]:
+        asked.append(beatmap_ids)
+        return {i: map_row(i) for i in beatmap_ids}
+
+    monkeypatch.setattr(players, "maps_for", maps_for)
+
+    body = (await env.get("/players/peppy")).json()
+
+    # One look-up for every map in both lists.
+    assert asked == [ids]
+    for s in [*body["best"], *body["recent"]]:
+        assert s["beatmap"] == {
+            "id": s["beatmap_id"], "beatmapset_id": 3720, "artist": "Lix",
+            "title": "Tori no Uta", "version": "Hard", "star_rating": 3.56,
+        }  # fmt: skip
+
+
+async def test_a_missing_map_is_null(env: Env) -> None:
+    # The default fake gives no maps: each score still comes, with its map as null.
+    env.stored = player_row(FRESH)
+
+    body = (await env.get("/players/peppy")).json()
+
+    assert body["best"] and all(s["beatmap"] is None for s in body["best"])
+
+
+def test_score_out_picks_the_scores_map() -> None:
+    a, b = Score(**score_values(best_scores()[0])), Score(**score_values(best_scores()[1]))
+    maps = {a.beatmap_id: map_row(a.beatmap_id)}
+
+    with_map, without = players.score_out(a, maps), players.score_out(b, maps)
+
+    assert with_map.beatmap is not None and with_map.beatmap.id == a.beatmap_id
+    assert without.beatmap is None if b.beatmap_id != a.beatmap_id else True
+
+
+class MapsSession:
+    def __init__(self, rows: list[Beatmap]) -> None:
+        self.rows = rows
+        self.statements: list[Any] = []
+
+    async def scalars(self, statement: Any) -> list[Beatmap]:
+        self.statements.append(statement)
+        return self.rows
+
+
+async def test_maps_for_is_one_query() -> None:
+    session = MapsSession([map_row(1), map_row(2)])
+
+    maps = await players.maps_for(cast(Any, session), {1, 2})
+
+    assert set(maps) == {1, 2} and maps[1].id == 1
+    [statement] = session.statements
+    pg = postgresql.dialect()  # type: ignore[no-untyped-call]  # SQLAlchemy leaves it untyped
+    sql = " ".join(str(statement.compile(dialect=pg)).split())
+    assert "FROM beatmaps WHERE beatmaps.id IN" in sql
+
+
+async def test_maps_for_nothing_asks_nothing() -> None:
+    session = MapsSession([])
+
+    assert await players.maps_for(cast(Any, session), set()) == {}
+    assert session.statements == []  # no query for a player with no scores

@@ -12,7 +12,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from osu_coach.db import get_session
-from osu_coach.models import Player, Score
+from osu_coach.models import Beatmap, Player, Score
 from osu_coach.osu.client import OsuApiError, OsuNotFoundError
 from osu_coach.worker import osu_sync
 
@@ -40,6 +40,19 @@ class PlayerOut(BaseModel):
     updated_at: datetime  # when we last synced this player from osu!
 
 
+class ScoreMapOut(BaseModel):
+    """The map a score was set on: enough to show it in a list."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    beatmapset_id: int  # the mapset, for its cover image and page on osu!
+    artist: str
+    title: str
+    version: str  # the difficulty name, e.g. "Hard"
+    star_rating: float
+
+
 class ScoreOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -57,6 +70,7 @@ class ScoreOut(BaseModel):
     date: datetime
     accuracy: float  # 0-1
     passed: bool
+    beatmap: ScoreMapOut | None = None  # None only if the map row is missing
 
 
 class PlayerResponse(BaseModel):
@@ -103,6 +117,21 @@ async def recent_scores(session: AsyncSession, osu_id: int) -> list[Score]:
         .limit(RECENT_LIMIT)
     )
     return list((await session.scalars(stmt)).all())
+
+
+async def maps_for(session: AsyncSession, beatmap_ids: set[int]) -> dict[int, Beatmap]:
+    """The stored maps with these ids, by id: one query for all of a player's scores."""
+    if not beatmap_ids:
+        return {}
+    rows = await session.scalars(select(Beatmap).where(Beatmap.id.in_(beatmap_ids)))
+    return {b.id: b for b in rows}
+
+
+def score_out(score: Score, maps: dict[int, Beatmap]) -> ScoreOut:
+    out = ScoreOut.model_validate(score)
+    beatmap = maps.get(score.beatmap_id)
+    out.beatmap = ScoreMapOut.model_validate(beatmap) if beatmap is not None else None
+    return out
 
 
 def is_stale(player: Player) -> bool:
@@ -160,8 +189,9 @@ async def get_player(
 
     best = await best_scores(session, player.osu_id)
     recent = await recent_scores(session, player.osu_id)
+    maps = await maps_for(session, {s.beatmap_id for s in [*best, *recent]})
     return PlayerResponse(
         player=PlayerOut.model_validate(player),
-        best=[ScoreOut.model_validate(s) for s in best],
-        recent=[ScoreOut.model_validate(s) for s in recent],
+        best=[score_out(s, maps) for s in best],
+        recent=[score_out(s, maps) for s in recent],
     )

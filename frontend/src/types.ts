@@ -17,6 +17,16 @@ export interface Player {
   updated_at: string // when it was last synced from osu!
 }
 
+// The map a score was set on.
+export interface ScoreMap {
+  id: number
+  beatmapset_id: number
+  artist: string
+  title: string
+  version: string // the difficulty name, e.g. "Hard"
+  star_rating: number
+}
+
 export interface Score {
   id: number
   beatmap_id: number
@@ -32,6 +42,7 @@ export interface Score {
   date: string
   accuracy: number // 0-1
   passed: boolean
+  beatmap: ScoreMap | null // null only if the map isn't stored
 }
 
 export interface PlayerResponse {

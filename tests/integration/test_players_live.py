@@ -269,3 +269,26 @@ def _returns(value: Any) -> Any:
         return value
 
     return method
+
+
+# ---------- Each score's map ----------
+
+
+async def test_each_score_comes_with_its_stored_map(api: httpx.AsyncClient, engine: Engine) -> None:
+    body = (await api.get("/players/peppy")).json()
+
+    # The sync stored every play's map; the response carries each one's details.
+    # (Closed at once: an open connection would hold a lock the cleanup waits on.)
+    sql = "SELECT id, beatmapset_id, artist, title, version, star_rating FROM beatmaps"
+    with engine.connect() as conn:
+        stored = {row[0]: tuple(row) for row in conn.execute(text(sql))}
+    scores = [*body["best"], *body["recent"]]
+    assert scores
+    for s in scores:
+        m = s["beatmap"]
+        assert m is not None, f"score {s['id']} has no map"
+        assert m["id"] == s["beatmap_id"]
+        assert (m["id"], m["beatmapset_id"], m["artist"], m["title"], m["version"]) == tuple(
+            stored[s["beatmap_id"]][:5]
+        )
+        assert m["star_rating"] == pytest.approx(stored[s["beatmap_id"]][5])

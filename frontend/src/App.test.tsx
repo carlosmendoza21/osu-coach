@@ -1,6 +1,7 @@
 // Unit tests for the placeholder page: it checks the API on load and says what it found.
 // fetch is replaced with a fake.
 import { render, screen } from '@testing-library/react'
+import { MemoryRouter } from 'react-router'
 import { afterEach, expect, test, vi } from 'vitest'
 
 import App from './App'
@@ -15,18 +16,26 @@ function fakeFetch(answer: () => Promise<Response>) {
   return fn
 }
 
-test('the page has its title', () => {
+test('the header links home', () => {
   fakeFetch(() => new Promise(() => {})) // never answers
 
-  render(<App />)
+  render(
+    <MemoryRouter>
+      <App />
+    </MemoryRouter>,
+  )
 
-  expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('osu! coach')
+  expect(screen.getByRole('link', { name: 'osu! coach' })).toHaveAttribute('href', '/')
 })
 
 test('it says it is checking until the API answers', () => {
   fakeFetch(() => new Promise(() => {}))
 
-  render(<App />)
+  render(
+    <MemoryRouter>
+      <App />
+    </MemoryRouter>,
+  )
 
   expect(screen.getByRole('status')).toHaveTextContent('Checking the API...')
 })
@@ -34,7 +43,11 @@ test('it says it is checking until the API answers', () => {
 test('it asks the API once, through the proxy', () => {
   const fetch = fakeFetch(() => new Promise(() => {}))
 
-  render(<App />)
+  render(
+    <MemoryRouter>
+      <App />
+    </MemoryRouter>,
+  )
 
   expect(fetch).toHaveBeenCalledTimes(1)
   expect(fetch.mock.calls[0][0]).toBe('/api/health')
@@ -51,7 +64,11 @@ test.each([
 ])('when the API is %s, it says so', async (_name, answer, text) => {
   fakeFetch(answer)
 
-  render(<App />)
+  render(
+    <MemoryRouter>
+      <App />
+    </MemoryRouter>,
+  )
 
   const status = await screen.findByText(new RegExp(text))
   expect(status).toHaveAttribute('role', 'status')
@@ -61,4 +78,36 @@ test.each([
   } else {
     expect(status).toHaveClass('ok')
   }
+})
+
+// ---------- Routes ----------
+
+test.each([
+  ['/', 'API'],
+  ['/players/peppy', 'Loading peppy...'],
+  ['/nowhere', "This page doesn't exist."],
+  ['/players', "This page doesn't exist."], // a player page needs a name
+])('%s shows its page', (path, text) => {
+  fakeFetch(() => new Promise(() => {}))
+
+  render(
+    <MemoryRouter initialEntries={[path]}>
+      <App />
+    </MemoryRouter>,
+  )
+
+  expect(screen.getByText(text, { exact: false })).toBeInTheDocument()
+})
+
+test.each(['/', '/players/peppy', '/nowhere'])('every page has the header search (%s)', (path) => {
+  fakeFetch(() => new Promise(() => {}))
+
+  render(
+    <MemoryRouter initialEntries={[path]}>
+      <App />
+    </MemoryRouter>,
+  )
+
+  expect(screen.getByRole('search')).toBeInTheDocument()
+  expect(screen.getByRole('link', { name: 'osu! coach' })).toHaveAttribute('href', '/')
 })

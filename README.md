@@ -10,7 +10,8 @@ docker compose up --build
 ```
 
 - API: http://localhost:8000 (docs at `/docs`, health at `/health`)
-- `GET /players/{username}`: a player's profile, top 50 plays by pp and latest 20 plays.
+- `GET /players/{username}`: a player's profile, top 50 plays by pp and latest 20 plays,
+  each with its map (artist, title, difficulty, star rating).
   Synced from osu! through the worker when the stored copy is missing or older than
   10 minutes; otherwise served straight from the database
 - `POST /replays/upload` (a multipart `file`, at most 4 MB): stores an osu! standard
@@ -85,7 +86,7 @@ every push.
 On Windows, async database code needs a selector event loop (psycopg can't use the
 default one); `tests/conftest.py` sets it for the tests, and the worker task sets it too.
 
-**Unit tests** ([`tests/unit/`](tests/unit), 840 tests): call the code directly with nothing
+**Unit tests** ([`tests/unit/`](tests/unit), 845 tests): call the code directly with nothing
 running. `respx` fakes the osu! token endpoint (and blocks any unmocked request),
 `fakeredis` stands in for Redis, and the rate limiter gets a fake clock, so a 60 s window
 runs instantly.
@@ -341,7 +342,7 @@ statements are compiled to Postgres SQL:
   resolved id; limits are passed on
 - If osu! fails at any of the three requests, nothing is written
 
-*`GET /players/{username}`* (18), with a fake sync, replaced queries and a fake session:
+*`GET /players/{username}`* (23), with a fake sync, replaced queries and a fake session:
 - A fresh player is served without syncing; a stale or unknown one is synced, then
   reloaded by the id the worker returned (`populate_existing`), so the response shows the
   synced values; the username is passed on as typed
@@ -350,8 +351,11 @@ statements are compiled to Postgres SQL:
   degradation)
 - The response has exactly the public fields; the worker is waited on in a thread with a
   30 s timeout
+- Each score comes with its map (id, mapset, artist, title, difficulty, stars), looked up
+  in one query for both lists, and none at all for a player with no scores; a map that
+  isn't stored is `null` rather than dropping the score
 
-**Integration tests** ([`tests/integration/`](tests/integration), 169 tests): use real
+**Integration tests** ([`tests/integration/`](tests/integration), 170 tests): use real
 Redis, real time, real processes, and the real osu! API with the credentials in `.env`.
 They skip with the reason if Redis isn't running (`docker compose up -d redis`) or the
 credentials are missing, and clean up their Redis keys even if a check fails.
@@ -418,7 +422,7 @@ revision before the beatmaps table, adds a player and scores on maps that aren't
 - A real sync of peppy from osu! stores every score's map, once (needs Redis and
   credentials)
 
-*`GET /players/{username}`* (14, Postgres; also run in CI): the real queries, and the
+*`GET /players/{username}`* (15, Postgres; also run in CI): the real queries, and the
 endpoint end to end with a sync that runs the real `sync_player` against a fake osu!
 - Lookup ignores letter case and prefers the most recently synced row for a reused name
 - Best: the top 50 by pp, highest first, without failed plays (Postgres sorts NULLs
@@ -426,6 +430,7 @@ endpoint end to end with a sync that runs the real `sync_player` against a fake 
 - A new player is synced and served; a repeat request (any letter case) is served from
   the database; a stale player is resynced and the response shows the new values; an
   unknown player is `404` and stores nothing
+- Every score, best and recent, comes with the map the sync stored for it
 
 *`.osu` files* (8): real downloads (needs Redis) match the saved files byte for byte,
 the API's checksum matches the downloaded file (including for a real score's map),
@@ -506,7 +511,7 @@ with `OsuNotFoundError`. It writes to the dev database, like the app.
 
 **Frontend tests** ([`frontend/`](frontend), Vitest; also run in CI):
 
-*Unit* (28, `npm test`), with `fetch` replaced:
+*Unit* (110, `npm test`), with `fetch` replaced:
 - `api.ts`: each call's URL, under the proxied `/api`, with player names escaped (a space,
   a slash or a `?` can't break the path); an upload posts the file as the `file` form
   field, without a hand-set Content-Type (the browser adds multipart's boundary); the JSON
@@ -514,15 +519,29 @@ with `OsuNotFoundError`. It writes to the dev database, like the app.
 - Errors: FastAPI's `detail` string, or the first field error's message, becomes an
   `ApiError` with the status; a proxy's HTML error page or another body gives the status
   text, and with none, "request failed (500)"; a network failure passes through
-- The page: its title, "Checking the API..." until the answer, one request to
-  `/api/health`, then "API connected", or "API unreachable" for an answer other than ok, a
-  proxy error or no answer at all
+- The home page: "Checking the API..." until the answer, one request to `/api/health`,
+  then "API connected", or "API unreachable" for an answer other than ok, a proxy error or
+  no answer at all
+- Routes: `/`, `/players/:username`, and "This page doesn't exist." for anything else
+  (`/players` alone included); the header link home and the search box on every page
+- Formatting: pp rounded with thousands separators, a score's 0-1 accuracy and a player's
+  percent (not multiplied twice), "unranked", "NM" or "+HDDT", stars, dates, and "time
+  ago" in whole units, singular or plural, never in the future
+- The search box: trims the name, escapes it into the URL (a space, a slash, a `?`), and
+  does nothing for an empty or blank name; names are capped at 32 characters
+- The plays table: each column as osu! shows it, the map linked to osu! in a new tab that
+  can't reach back, the map's id when its details aren't stored, failed plays dimmed with
+  an F and no pp, misses in red, and a line instead of an empty table
+- The profile page: one request for the name in the URL (escaped), a loading message, the
+  profile and both tables; 404, 502, 504, other errors and no answer each explained;
+  searching another player drops the last one at once, and a late answer (or error) for
+  the previous player never replaces the new one
 
 *Live* (5, `npm run test:live`; needs the API running, skips otherwise): a real Vite dev
 server is started with `vite.config.ts`, and `api.ts` calls the API through its proxy:
 `/health` answers; an unknown replay is the API's `404` with its reason; an upload reaches
 the parser (so the form field name is right); peppy's profile and plays have exactly the
-fields `types.ts` declares, no more and no fewer; and a real replay from `data/replays/`
+fields `types.ts` declares, no more and no fewer, and every play comes with its map; and a real replay from `data/replays/`
 uploads, with its detail's fields as declared and our counts matching osu!'s.
 
 Both suites were checked against deliberately broken code:
@@ -635,6 +654,14 @@ Both suites were checked against deliberately broken code:
   (caught only by the live tests, which use the real proxy). Not ignoring an answer that
   arrives after the page is gone changes nothing visible: React 18 dropped its warning
   for it, so no test can see it; the flag stays as React's recommended pattern
+- The profile page and each score's map (20 breaks): pp not rounded, a score's accuracy
+  not x100 or a player's x100 again, no rank shown as "#0", no mods as "+", always plural,
+  the 404 not explained, the search not trimmed or not escaped, failed plays not dimmed, no
+  map id fallback, a map link that can reach back, late answers not ignored, the old
+  player shown while loading, the player route renamed, no header search; in the API, maps
+  looked up for a player with no scores, not attached, or not for recent plays. Not
+  clamping a future "time ago" to zero changes nothing: a negative time is under every
+  unit, so it reads "just now" either way
 
 `.gitattributes` marks `.osu` files as binary: git's `\r\n` to `\n` conversion would change
 a map file's MD5 and break the fixtures on other machines.
@@ -676,7 +703,8 @@ src/osu_coach/
   worker.py    Celery app and its tasks: osu_sync, fetch_beatmap, fetch_replay_map,
                analyze_replay
 migrations/    Alembic
-frontend/      React + TypeScript (Vite): src/api.ts calls the API, src/types.ts its responses
+frontend/      React + TypeScript (Vite): src/api.ts calls the API, src/types.ts its responses,
+               src/pages/ the pages (home, player), src/components/ the parts they share
 tests/
   unit/        no services needed
   fixtures/osu/  saved real osu! API responses

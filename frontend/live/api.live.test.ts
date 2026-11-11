@@ -12,7 +12,15 @@ import { type ViteDevServer, createServer } from 'vite'
 import { afterAll, beforeAll, describe, expect, test, vi } from 'vitest'
 
 import { ApiError, getHealth, getPlayer, getReplay, uploadReplay } from '../src/api'
-import type { Beatmap, Player, Replay, ReplayDetail, Score, UploadResponse } from '../src/types'
+import type {
+  Beatmap,
+  Player,
+  Replay,
+  ReplayDetail,
+  Score,
+  ScoreMap,
+  UploadResponse,
+} from '../src/types'
 
 const API = 'http://localhost:8000'
 const apiUp = await fetch(`${API}/health`).then((r) => r.ok, () => false)
@@ -24,7 +32,9 @@ const PLAYER = { osu_id: 1, username: 1, country: 1, global_rank: 1, pp: 1, play
   accuracy: 1, updated_at: 1 } satisfies Record<keyof Player, 1>
 const SCORE = { id: 1, beatmap_id: 1, score: 1, max_combo: 1, count_300: 1, count_100: 1,
   count_50: 1, count_miss: 1, rank: 1, pp: 1, mods: 1, date: 1, accuracy: 1,
-  passed: 1 } satisfies Record<keyof Score, 1>
+  passed: 1, beatmap: 1 } satisfies Record<keyof Score, 1>
+const SCORE_MAP = { id: 1, beatmapset_id: 1, artist: 1, title: 1, version: 1,
+  star_rating: 1 } satisfies Record<keyof ScoreMap, 1>
 const REPLAY = { id: 1, beatmap_checksum: 1, score_id: 1, player_name: 1, mods: 1, lazer: 1,
   count_300: 1, count_100: 1, count_50: 1, count_miss: 1, score: 1, max_combo: 1, perfect: 1,
   played_at: 1, frame_count: 1, parsed_at: 1, unstable_rate: 1, mean_error_ms: 1,
@@ -103,6 +113,10 @@ describe.skipIf(!apiUp)('through the dev server, against the real API', () => {
     expect(response.best.length).toBeGreaterThan(0)
     for (const score of [...response.best, ...response.recent]) {
       expect(fields(score)).toEqual(expected(SCORE))
+      // The sync stores every play's map, so each one comes with it.
+      expect(score.beatmap).not.toBeNull()
+      expect(fields(score.beatmap ?? {})).toEqual(expected(SCORE_MAP))
+      expect(score.beatmap?.id).toBe(score.beatmap_id)
     }
   })
 
