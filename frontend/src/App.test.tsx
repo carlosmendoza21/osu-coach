@@ -111,3 +111,30 @@ test.each(['/', '/players/peppy', '/nowhere'])('every page has the header search
   expect(screen.getByRole('search')).toBeInTheDocument()
   expect(screen.getByRole('link', { name: 'osu! coach' })).toHaveAttribute('href', '/')
 })
+
+test.each([
+  ['/replays/new', 'Upload a replay'],
+  ['/replays/2', 'Loading replay 2...'],
+])('%s shows its page', (path, text) => {
+  fakeFetch(() => new Promise(() => {}))
+
+  render(
+    <MemoryRouter initialEntries={[path]}>
+      <App />
+    </MemoryRouter>,
+  )
+
+  expect(screen.getByRole('main')).toHaveTextContent(text)
+})
+
+test.each(['/', '/players/peppy', '/replays/2'])('every page links to the upload page (%s)', (path) => {
+  fakeFetch(() => new Promise(() => {}))
+
+  render(
+    <MemoryRouter initialEntries={[path]}>
+      <App />
+    </MemoryRouter>,
+  )
+
+  expect(screen.getByRole('link', { name: 'Upload a replay' })).toHaveAttribute('href', '/replays/new')
+})

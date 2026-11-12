@@ -194,3 +194,102 @@ table.scores tr.failed {
     overflow-x: auto;
   }
 }
+
+/* ---------- Header link ---------- */
+
+.nav-link {
+  color: var(--accent);
+  text-decoration: none;
+  font-weight: 600;
+}
+
+.nav-link:hover {
+  text-decoration: underline;
+}
+
+/* ---------- Upload ---------- */
+
+.dropzone {
+  display: block;
+  margin: 1.5rem 0;
+  padding: 2.5rem 1rem;
+  border: 2px dashed color-mix(in srgb, var(--muted) 50%, transparent);
+  border-radius: 8px;
+  text-align: center;
+  cursor: pointer;
+}
+
+.dropzone.dragging {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+
+.dropzone.busy {
+  cursor: progress;
+  opacity: 0.7;
+}
+
+.dropzone input {
+  display: block;
+  margin: 0 auto 0.75rem;
+}
+
+/* ---------- Replay ---------- */
+
+.replay-header h1 {
+  font-size: 1.4rem;
+  margin-bottom: 0.25rem;
+  color: var(--text);
+}
+
+.replay-header .version {
+  color: var(--muted);
+}
+
+table.counts,
+table.patterns {
+  border-collapse: collapse;
+  margin: 1.5rem 0;
+  font-size: 0.95rem;
+}
+
+table.counts caption,
+table.patterns caption {
+  text-align: left;
+  font-weight: 600;
+  font-size: 1.1rem;
+  padding-bottom: 0.5rem;
+}
+
+table.counts th,
+table.counts td,
+table.patterns th,
+table.patterns td {
+  text-align: right;
+  padding: 0.35rem 0.9rem;
+  border-bottom: 1px solid color-mix(in srgb, var(--muted) 20%, transparent);
+}
+
+table.counts th[scope='row'],
+table.patterns th[scope='row'] {
+  text-align: left;
+}
+
+table.patterns td.miss {
+  color: var(--bad);
+  font-weight: 600;
+}
+
+.match {
+  font-size: 0.85rem;
+  font-weight: 400;
+  margin-left: 0.5rem;
+}
+
+.match.ok {
+  color: var(--ok);
+}
+
+.match.off {
+  color: var(--muted);
+}

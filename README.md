@@ -60,6 +60,10 @@ npm install
 npm run dev
 ```
 
+Pages: `/players/{name}` (a profile and its plays), `/replays/new` (upload an `.osr`), and
+`/replays/{id}` (a replay's analysis: counts against osu!'s, UR, timing, aim, results by
+pattern; it checks again every 2 s until the analysis is done).
+
 The dev server forwards `/api/...` to the API on port 8000 (`API_URL` to change it), so
 the page and the API share one address. Checks, as in CI's frontend job:
 
@@ -511,7 +515,7 @@ with `OsuNotFoundError`. It writes to the dev database, like the app.
 
 **Frontend tests** ([`frontend/`](frontend), Vitest; also run in CI):
 
-*Unit* (110, `npm test`), with `fetch` replaced:
+*Unit* (179, `npm test`), with `fetch` replaced:
 - `api.ts`: each call's URL, under the proxied `/api`, with player names escaped (a space,
   a slash or a `?` can't break the path); an upload posts the file as the `file` form
   field, without a hand-set Content-Type (the browser adds multipart's boundary); the JSON
@@ -536,13 +540,32 @@ with `OsuNotFoundError`. It writes to the dev database, like the app.
   profile and both tables; 404, 502, 504, other errors and no answer each explained;
   searching another player drops the last one at once, and a late answer (or error) for
   the previous player never replaces the new one
+- Analysis formatting: osu!'s accuracy formula (a 100 a third, a 50 a sixth; 0 objects
+  give 0, not NaN; FREEDOM DiVE's counts give osu!'s 99.58%), "1.8 ms early / late / on
+  time" (within 0.05 ms), UR and pixels; upload errors (413, 422 with the parser's
+  reason) and replay errors (404) in plain words
+- The analysis: the map linked to osu!, the player, mods, stars and date (or "Map not
+  fetched yet"); accuracy, UR, timing, aim error and combo, with UR and aim explained on
+  hover; osu!'s counts and ours side by side, each row its own when they differ, "✓
+  matches osu!" or the known reason they differ; patterns in a fixed order (unknown ones
+  last), each with its accuracy and misses in red
+- The upload page: a picked or dropped file is sent as the `file` field, then the
+  replay's page opens; while uploading, the file is named and the picker is off; a
+  refusal is explained and another file (even the same one) can be tried
+- The replay page, on fake timers: one request for the id in the URL (none for an id that
+  isn't a whole number); an analyzed replay shown at once and not asked for again;
+  pending says whether the map is being fetched or the replay analyzed, and asks again
+  every 2 s (not before) until analyzed; after 90 s it stops and explains; leaving the
+  page or an error stops the checking; moving to another replay drops the last one at
+  once, and its late answer never replaces the new one
 
 *Live* (5, `npm run test:live`; needs the API running, skips otherwise): a real Vite dev
 server is started with `vite.config.ts`, and `api.ts` calls the API through its proxy:
 `/health` answers; an unknown replay is the API's `404` with its reason; an upload reaches
 the parser (so the form field name is right); peppy's profile and plays have exactly the
 fields `types.ts` declares, no more and no fewer, and every play comes with its map; and a real replay from `data/replays/`
-uploads, with its detail's fields as declared and our counts matching osu!'s.
+uploads and is checked until analyzed, as the replay page does, with its detail's fields
+(every pattern's too) as declared and our counts matching osu!'s.
 
 Both suites were checked against deliberately broken code:
 - `auth.py`: removing the expiry margin, the `400`/`401` check, or the cache read, sending
@@ -662,6 +685,15 @@ Both suites were checked against deliberately broken code:
   looked up for a player with no scores, not attached, or not for recent plays. Not
   clamping a future "time ago" to zero changes nothing: a negative time is under every
   unit, so it reads "just now" either way
+- The replay pages (24 breaks): 100s weighted like 300s, no guard for zero objects, early
+  and late swapped, no "on time", the 413 or 404 not explained, the parser's reason
+  dropped, no redirect after upload, the picker not cleared, no drag highlight, the
+  picker on while uploading, errors not shown, no checking again, checking every 4 s,
+  never giving up, checking on after leaving, late answers not ignored, bad ids asked
+  for, the old replay shown while loading, patterns unsorted, the verdict inverted, the
+  osu! row showing our counts, misses not standing out, and no upload link. Two first got
+  through, both gaps in the tests (the next replay always answered at once; the sample's
+  two rows of counts were equal); a test for each was added
 
 `.gitattributes` marks `.osu` files as binary: git's `\r\n` to `\n` conversion would change
 a map file's MD5 and break the fixtures on other machines.
@@ -704,7 +736,8 @@ src/osu_coach/
                analyze_replay
 migrations/    Alembic
 frontend/      React + TypeScript (Vite): src/api.ts calls the API, src/types.ts its responses,
-               src/pages/ the pages (home, player), src/components/ the parts they share
+               src/pages/ the pages (home, player, upload, replay), src/components/ the
+               parts they share
 tests/
   unit/        no services needed
   fixtures/osu/  saved real osu! API responses

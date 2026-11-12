@@ -1,5 +1,5 @@
 // Sample API data for tests, shaped like the real responses (src/types.ts).
-import type { PlayerResponse, Score } from '../types'
+import type { PlayerResponse, ReplayDetail, Score } from '../types'
 
 export function score(changes: Partial<Score> = {}): Score {
   return {
@@ -47,5 +47,71 @@ export function playerResponse(changes: Partial<PlayerResponse['player']> = {}):
       score({ id: 2, rank: 'S', pp: 56.1, accuracy: 0.9848, mods: [], count_100: 11 }),
     ],
     recent: [score({ id: 3, rank: 'F', passed: false, pp: null, count_miss: 12 })],
+  }
+}
+
+export function replayDetail(changes: Partial<ReplayDetail> = {}): ReplayDetail {
+  return {
+    replay: {
+      id: 2,
+      beatmap_checksum: '345dd69cceb62b0d952fcc3e90000225',
+      score_id: 7383778441,
+      player_name: 'mrekk',
+      mods: [],
+      lazer: true,
+      count_300: 2224,
+      count_100: 14,
+      count_50: 0,
+      count_miss: 0,
+      score: 988492,
+      max_combo: 2666,
+      perfect: true,
+      played_at: '2026-08-31T14:05:51Z',
+      frame_count: 18098,
+      parsed_at: '2026-11-04T04:26:07Z',
+      unstable_rate: 66.879,
+      mean_error_ms: -2.24,
+      mean_aim_error_px: 11.31,
+      analyzed_at: '2026-11-04T04:26:09Z',
+    },
+    beatmap: {
+      id: 4904540,
+      beatmapset_id: 2296316,
+      artist: 'xi',
+      title: 'FREEDOM DiVE',
+      creator: 'mapper',
+      version: 'Arles',
+      star_rating: 9.68,
+      ar: 10,
+      od: 10,
+      cs: 4,
+      hp: 5,
+      bpm: 222.22,
+      length_s: 258,
+    },
+    status: 'analyzed',
+    judged: { '300': 2224, '100': 14, '50': 0, miss: 0 },
+    matches_official: true,
+    by_pattern: {
+      other: { '300': 187, '100': 3, '50': 0, miss: 0 },
+      stream: { '300': 1438, '100': 5, '50': 0, miss: 0 },
+      jump: { '300': 263, '100': 0, '50': 0, miss: 0 },
+      slider: { '300': 336, '100': 6, '50': 0, miss: 0 },
+    },
+    ...changes,
+  }
+}
+
+/** The same replay before its analysis: no stats, counts or patterns yet. */
+export function pendingDetail(withMap = true): ReplayDetail {
+  const d = replayDetail()
+  return {
+    ...d,
+    replay: { ...d.replay, unstable_rate: null, mean_error_ms: null, mean_aim_error_px: null, analyzed_at: null },
+    beatmap: withMap ? d.beatmap : null,
+    status: 'pending',
+    judged: null,
+    matches_official: null,
+    by_pattern: {},
   }
 }

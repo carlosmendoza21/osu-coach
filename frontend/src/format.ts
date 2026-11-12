@@ -60,3 +60,27 @@ export function timeAgo(iso: string, now: Date = new Date()): string {
   }
   return 'just now'
 }
+
+/** osu!'s accuracy for some hit counts: 300s count fully, 100s a third, 50s a sixth. */
+export function accuracyOf(counts: { '300': number; '100': number; '50': number; miss: number }): number {
+  const total = counts['300'] + counts['100'] + counts['50'] + counts.miss
+  if (total === 0) return 0
+  return (300 * counts['300'] + 100 * counts['100'] + 50 * counts['50']) / (300 * total)
+}
+
+/** A mean timing error -> "1.8 ms early", "2.2 ms late", or "on time" (within 0.05 ms). */
+export function formatTiming(meanMs: number | null): string {
+  if (meanMs === null) return '-'
+  if (Math.abs(meanMs) < 0.05) return 'on time'
+  return `${Math.abs(meanMs).toFixed(1)} ms ${meanMs < 0 ? 'early' : 'late'}`
+}
+
+/** An unstable rate -> "95.5"; lower is steadier timing. */
+export function formatUr(ur: number | null): string {
+  return ur === null ? '-' : ur.toFixed(1)
+}
+
+/** An aim error in osu! pixels -> "14.2 px" */
+export function formatPx(px: number | null): string {
+  return px === null ? '-' : `${px.toFixed(1)} px`
+}

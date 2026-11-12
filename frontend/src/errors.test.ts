@@ -2,7 +2,7 @@
 import { expect, test } from 'vitest'
 
 import { ApiError } from './api'
-import { playerError } from './errors'
+import { playerError, replayError, uploadError } from './errors'
 
 test.each([
   [new ApiError(404, "osu! player 'x' not found"), 'No osu! player is called "nobody".'],
@@ -16,4 +16,22 @@ test.each([
   ['a thrown string', "Couldn't reach the API. Is the backend running?"],
 ])('%s -> %s', (error, message) => {
   expect(playerError('nobody', error)).toBe(message)
+})
+
+test.each([
+  [new ApiError(413, 'a replay is at most 4 MB'), 'That file is too large to be a replay (4 MB at most).'],
+  [new ApiError(422, 'only osu! standard replays are supported, not taiko'),
+   "That isn't a replay we can read: only osu! standard replays are supported, not taiko."],
+  [new ApiError(500, 'replay missing after storing it'), 'Something went wrong: replay missing after storing it'],
+  [new TypeError('Failed to fetch'), "Couldn't reach the API. Is the backend running?"],
+])('uploadError %s -> %s', (error, message) => {
+  expect(uploadError(error)).toBe(message)
+})
+
+test.each([
+  [new ApiError(404, 'replay 9 not found'), "There's no replay 9."],
+  [new ApiError(500, 'boom'), 'Something went wrong: boom'],
+  [new TypeError('Failed to fetch'), "Couldn't reach the API. Is the backend running?"],
+])('replayError %s -> %s', (error, message) => {
+  expect(replayError('9', error)).toBe(message)
 })

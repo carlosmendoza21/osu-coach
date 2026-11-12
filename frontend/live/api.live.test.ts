@@ -129,14 +129,21 @@ describe.skipIf(!apiUp)('through the dev server, against the real API', () => {
       expect(fields(upload)).toEqual(expected(UPLOAD))
       expect(fields(upload.replay)).toEqual(expected(REPLAY))
 
-      const detail = await getReplay(upload.replay.id)
+      // Checked again until analyzed, as the replay page does (a few seconds at most).
+      let detail = await getReplay(upload.replay.id)
+      for (let i = 0; detail.status === 'pending' && i < 30; i++) {
+        await new Promise((r) => setTimeout(r, 2000))
+        detail = await getReplay(upload.replay.id)
+      }
+      expect(detail.status).toBe('analyzed')
       expect(fields(detail)).toEqual(expected(DETAIL))
+      for (const counts of Object.values(detail.by_pattern)) {
+        expect(fields(counts)).toEqual(['100', '300', '50', 'miss'])
+      }
       expect(fields(detail.replay)).toEqual(expected(REPLAY))
       if (detail.beatmap) expect(fields(detail.beatmap)).toEqual(expected(BEATMAP))
-      if (detail.status === 'analyzed') {
-        expect(fields(detail.judged ?? {})).toEqual(['100', '300', '50', 'miss'])
-        expect(detail.matches_official).toBe(true) // our counts equal osu!'s
-      }
+      expect(fields(detail.judged ?? {})).toEqual(['100', '300', '50', 'miss'])
+      expect(detail.matches_official).toBe(true) // our counts equal osu!'s
     },
   )
 })

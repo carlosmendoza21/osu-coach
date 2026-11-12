@@ -2,14 +2,18 @@
 import { describe, expect, test } from 'vitest'
 
 import {
+  accuracyOf,
   formatAccuracy,
   formatCount,
   formatDate,
   formatMods,
   formatPercent,
   formatPp,
+  formatPx,
   formatRank,
   formatStars,
+  formatTiming,
+  formatUr,
   timeAgo,
 } from './format'
 
@@ -106,4 +110,51 @@ describe('timeAgo', () => {
   ])('%i seconds -> %s', (seconds, text) => {
     expect(timeAgo(ago(seconds), now)).toBe(text)
   })
+})
+
+describe('accuracyOf', () => {
+  test.each([
+    [{ '300': 10, '100': 0, '50': 0, miss: 0 }, 1],
+    [{ '300': 0, '100': 1, '50': 0, miss: 0 }, 1 / 3], // a 100 is worth a third
+    [{ '300': 0, '100': 0, '50': 1, miss: 0 }, 1 / 6], // a 50 a sixth
+    [{ '300': 0, '100': 0, '50': 0, miss: 4 }, 0],
+    [{ '300': 2224, '100': 14, '50': 0, miss: 0 }, (300 * 2224 + 100 * 14) / (300 * 2238)],
+    [{ '300': 0, '100': 0, '50': 0, miss: 0 }, 0], // nothing to judge: 0, not NaN
+  ])('%j -> %f', (counts, acc) => {
+    expect(accuracyOf(counts)).toBeCloseTo(acc, 10)
+  })
+
+  test("FREEDOM DiVE's counts give the accuracy osu! shows (99.58%)", () => {
+    expect(formatAccuracy(accuracyOf({ '300': 2224, '100': 14, '50': 0, miss: 0 }))).toBe('99.58%')
+  })
+})
+
+describe('formatTiming', () => {
+  test.each([
+    [-1.81, '1.8 ms early'],
+    [2.24, '2.2 ms late'],
+    [-0.04, 'on time'], // under 0.05 ms either way
+    [0.049, 'on time'],
+    [0, 'on time'],
+    [0.05, '0.1 ms late'], // from 0.05 ms, a direction
+    [null, '-'], // not analyzed
+  ])('%s -> %s', (ms, text) => {
+    expect(formatTiming(ms)).toBe(text)
+  })
+})
+
+test.each([
+  [95.48, '95.5'],
+  [66.879, '66.9'],
+  [null, '-'],
+])('formatUr %s -> %s', (ur, text) => {
+  expect(formatUr(ur)).toBe(text)
+})
+
+test.each([
+  [14.23, '14.2 px'],
+  [0, '0.0 px'],
+  [null, '-'],
+])('formatPx %s -> %s', (px, text) => {
+  expect(formatPx(px)).toBe(text)
 })
