@@ -15,6 +15,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from osu_coach.analysis import judged_counts, results_by_pattern
+from osu_coach.charts import replay_charts
 from osu_coach.config import get_settings
 from osu_coach.db import get_session
 from osu_coach.models import Beatmap, Replay
@@ -214,3 +215,54 @@ async def get_replay(
         matches_official=judged == official if judged is not None else None,
         by_pattern=await results_by_pattern(session, replay_id) if analyzed else {},
     )
+
+
+class NoteOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    idx: int
+    time_ms: int  # song time, for a time axis
+    result: str
+    error_ms: float | None  # real time; negative is early
+    aim_error_px: float | None
+    x: float  # as the player saw it (flipped with HR)
+    y: float
+    pattern: str
+
+
+class CursorGridOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    cols: int
+    rows: int
+    counts: list[int]  # row by row from the top-left
+    off_playfield: int
+
+
+class ChartsOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    rate: float
+    notes: list[NoteOut]
+    cursor: CursorGridOut
+
+
+@router.get(
+    "/replays/{replay_id}/charts",
+    response_model=ChartsOut,
+    responses={
+        404: {"description": "No replay has this id"},
+        409: {"description": "The replay isn't analyzed yet"},
+    },
+)
+async def get_replay_charts(
+    replay_id: int,
+    session: Annotated[AsyncSession, Depends(get_session)],
+    data_dir: Annotated[Path, Depends(get_data_dir)],
+) -> ChartsOut:
+    replay = await session.get(Replay, replay_id)
+    if replay is None:
+        raise HTTPException(404, f"replay {replay_id} not found")
+    if replay.analyzed_at is None or replay.beatmap_id is None:
+        raise HTTPException(409, f"replay {replay_id} isn't analyzed yet")
+    return ChartsOut.model_validate(await replay_charts(session, data_dir, replay))

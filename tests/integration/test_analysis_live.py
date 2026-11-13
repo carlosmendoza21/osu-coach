@@ -28,9 +28,11 @@ from osu_coach.analysis import (
     results_by_pattern,
     store_analysis,
 )
+from osu_coach.api import replays as replays_api
 from osu_coach.db import get_session
 from osu_coach.judge import Judgement
 from osu_coach.main import create_app
+from osu_coach.osrfile import MOD_BITS
 from osu_coach.osu.files import BeatmapFiles
 from osu_coach.osufile import parse_osu
 from tests.integration.test_replays_live import (
@@ -258,11 +260,12 @@ async def run_analysis(db: AsyncEngine, tmp_path: Path, replay_id: int) -> dict[
         return await analyze_replay(session, files, tmp_path, replay_id)
 
 
-async def played_replay(db: AsyncEngine, tmp_path: Path) -> int:
+async def played_replay(db: AsyncEngine, tmp_path: Path, mods: int = 0) -> int:
     """Map 22423 stored, and a stored replay playing it (taps 6 ms either side)."""
     await fetch_map(db, LookupOsu())
     frames = play(MAP.hit_objects, errors=(-6, 6))
-    data = osr(checksum=MAP_22423, frames=frames, seed=None, counts=(JUDGED, 0, 0, 0, 0, 0))
+    counts = (JUDGED, 0, 0, 0, 0, 0)
+    data = osr(checksum=MAP_22423, frames=frames, seed=None, counts=counts, mods=mods)
     return (await store(db, tmp_path, data)).id
 
 
@@ -334,6 +337,20 @@ async def get_replay(db: AsyncEngine, replay_id: int) -> httpx.Response:
         return await client.get(f"/replays/{replay_id}")
 
 
+async def get_charts(db: AsyncEngine, data_dir: Path, replay_id: int) -> httpx.Response:
+    app = create_app()
+
+    async def session() -> AsyncIterator[AsyncSession]:
+        async with async_sessionmaker(db)() as s:
+            yield s
+
+    app.dependency_overrides[get_session] = session
+    app.dependency_overrides[replays_api.get_data_dir] = lambda: data_dir
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        return await client.get(f"/replays/{replay_id}/charts")
+
+
 async def test_get_replay_against_postgres(db: AsyncEngine, tmp_path: Path) -> None:
     replay_id = await played_replay(db, tmp_path)
 
@@ -350,3 +367,56 @@ async def test_get_replay_against_postgres(db: AsyncEngine, tmp_path: Path) -> N
     assert body["replay"]["unstable_rate"] == pytest.approx(60, abs=0.1)
     assert sum(c["300"] for c in body["by_pattern"].values()) == JUDGED
     assert (await get_replay(db, 999)).status_code == 404
+
+
+# ---------- Charts ----------
+
+
+async def test_charts_of_an_analyzed_replay(db: AsyncEngine, tmp_path: Path) -> None:
+    replay_id = await played_replay(db, tmp_path)
+    assert (await get_charts(db, tmp_path, replay_id)).status_code == 409  # not analyzed yet
+
+    await run_analysis(db, tmp_path, replay_id)
+    body = (await get_charts(db, tmp_path, replay_id)).json()
+
+    notes = body["notes"]
+    assert body["rate"] == 1.0
+    assert [n["idx"] for n in notes] == [
+        i for i, h in enumerate(MAP.hit_objects) if h.kind != "spinner"
+    ]  # every circle and slider head, in map order
+    assert {n["error_ms"] for n in notes} == {-6.0, 6.0}  # the taps, 6 ms either side
+    assert {n["result"] for n in notes} == {"300"}
+    # Each note sits where the map file puts it, with its stored pattern.
+    for n in notes:
+        h = MAP.hit_objects[n["idx"]]
+        assert (n["x"], n["y"], n["time_ms"]) == (h.x, h.y, h.time_ms)
+    # Every tap was on a note's center; each frame is counted once, on or off the field.
+    grid = body["cursor"]
+    assert grid["counts"][0] == 0 and max(grid["counts"]) > 0
+    assert sum(grid["counts"]) + grid["off_playfield"] == 2 * JUDGED
+
+
+async def test_charts_of_a_dt_play_are_in_real_time(db: AsyncEngine, tmp_path: Path) -> None:
+    replay_id = await played_replay(db, tmp_path, mods=MOD_BITS["DT"])
+    await run_analysis(db, tmp_path, replay_id)
+
+    body = (await get_charts(db, tmp_path, replay_id)).json()
+
+    assert body["rate"] == 1.5
+    assert {n["error_ms"] for n in body["notes"]} == {-4.0, 4.0}  # 6 ms of song time / 1.5
+
+
+async def test_charts_of_an_hr_play_are_flipped(db: AsyncEngine, tmp_path: Path) -> None:
+    # Taps where the file says: with HR the map is flipped, so only notes near the middle
+    # line are hit, but every note's position comes back flipped, as the player saw it.
+    replay_id = await played_replay(db, tmp_path, mods=MOD_BITS["HR"])
+    await run_analysis(db, tmp_path, replay_id)
+
+    body = (await get_charts(db, tmp_path, replay_id)).json()
+
+    for n in body["notes"]:
+        assert n["y"] == 384 - MAP.hit_objects[n["idx"]].y
+
+
+async def test_charts_of_no_replay_is_404(db: AsyncEngine, tmp_path: Path) -> None:
+    assert (await get_charts(db, tmp_path, 999)).status_code == 404

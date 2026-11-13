@@ -198,6 +198,14 @@ def test_uploading_a_replay_analyzes_it(api: httpx.Client) -> None:
     assert sum(detail["judged"].values()) == judged
     assert sum(sum(c.values()) for c in detail["by_pattern"].values()) == judged
 
+    # And the charts' data: every judged note with its timing, and the cursor's grid.
+    charts = api.get(f"/replays/{replay_id}/charts").json()
+    assert len(charts["notes"]) == judged
+    assert {n["error_ms"] for n in charts["notes"]} == {-6.0, 6.0}
+    grid = charts["cursor"]
+    assert len(grid["counts"]) == grid["cols"] * grid["rows"] == 64 * 48
+    assert sum(grid["counts"]) + grid["off_playfield"] == 2 * judged  # down and up per tap
+
 
 def test_an_unknown_replay_is_404(api: httpx.Client) -> None:
     resp = api.get("/replays/999999999")

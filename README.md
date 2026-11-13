@@ -23,6 +23,10 @@ docker compose up --build
   whether they match osu!'s, UR, timing bias, aim error, and results by pattern (jump,
   stream, slider, other). `"pending"` with empty analysis until it's done; `404` for an
   unknown id
+- `GET /replays/{id}/charts`: the data behind an analyzed replay's charts: each judged
+  note's timing error (in real time), aim error, position as the player saw it (flipped
+  with HR) and pattern, and a 64 x 48 grid of where the cursor spent its time. `409`
+  until the replay is analyzed
 - Postgres 16 + pgvector on `5432`, Redis on `6379`
 - The `migrate` service runs `alembic upgrade head` before the API and worker start.
 
@@ -90,7 +94,7 @@ every push.
 On Windows, async database code needs a selector event loop (psycopg can't use the
 default one); `tests/conftest.py` sets it for the tests, and the worker task sets it too.
 
-**Unit tests** ([`tests/unit/`](tests/unit), 845 tests): call the code directly with nothing
+**Unit tests** ([`tests/unit/`](tests/unit), 882 tests): call the code directly with nothing
 running. `respx` fakes the osu! token endpoint (and blocks any unmocked request),
 `fakeredis` stands in for Redis, and the rate limiter gets a fake clock, so a 60 s window
 runs instantly.
@@ -298,6 +302,16 @@ no longer reports AR or OD with mods, so there's nothing live to check):
 - An unknown id is `404` and nothing else is looked up; an id that isn't a number is `422`;
   the documented responses are 200, 404 and 422
 
+*Chart data* (37, `GET /replays/{id}/charts`), on hand-made frames and a fake session:
+- The cursor grid: 8 x 8 px cells by default, each frame in its cell (the corners, the
+  middle, a cell's edges), the playfield's right and bottom edges outside it, frames off
+  the playfield counted apart, every frame counted once, other grid sizes
+- Each note: its result, timing and aim rounded to two places, real time for DT/NC/HT
+  (the time axis stays on the map's clock), HR flipping it up and down only, a note never
+  pressed with no timing; the query joins this replay's map and keeps map order
+- The endpoint: the data with the configured data folder; `404` for no replay and `409`
+  for one not analyzed (or with no map), reading no files; documented responses
+
 *Worker tasks* (2): the tasks' names, and the errors declared as expected (`throws=`), so
 Celery logs a missing player, a taiko map, a changed map, an unknown replay, a map not
 stored yet or unsupported mods in one line instead of a traceback.
@@ -359,7 +373,7 @@ statements are compiled to Postgres SQL:
   in one query for both lists, and none at all for a player with no scores; a map that
   isn't stored is `null` rather than dropping the score
 
-**Integration tests** ([`tests/integration/`](tests/integration), 170 tests): use real
+**Integration tests** ([`tests/integration/`](tests/integration), 174 tests): use real
 Redis, real time, real processes, and the real osu! API with the credentials in `.env`.
 They skip with the reason if Redis isn't running (`docker compose up -d redis`) or the
 credentials are missing, and clean up their Redis keys even if a check fails.
@@ -470,7 +484,7 @@ counts equal the official ones osu! wrote into the file, every circle and slider
 judged once, and the timing looks like a real player's (mean near 0, UR 30-200). All
 three current replays match exactly (gwb 1186/24/2/9, mrekk 2224/14/0/0 and 2838/18/0/0).
 
-*Analysis* (17, Postgres; also run in CI), on map 22423 and replays built on it: results
+*Analysis* (21, Postgres; also run in CI), on map 22423 and replays built on it: results
 and summary stored and read back exactly; analyzing again replaces everything (fewer
 objects, no leftover misses); another replay's results are left alone; an unanalyzed
 replay has empty columns. Deleting a replay deletes its results; an analyzed map can't be
@@ -482,6 +496,10 @@ id and analysis time on the replay, the same rows when analyzed twice; a replay 
 isn't stored, or no replay at all, is refused. Our counts are none before analysis and
 exact after; `GET /replays/{id}` against Postgres shows a replay pending (with its map
 already) and then analyzed (251 300s, matching osu!, UR 60), and `404` for no replay.
+Its chart data: `409` before analysis, then every circle and slider head in map order at
+the map file's positions, with the taps' 6 ms either way and every frame counted; a DT
+play's timing in real time (4 ms); an HR play's notes flipped as the player saw them;
+`404` for no replay.
 
 *Storing a replay* (14, Postgres; also run in CI): the row holds the replay exactly
 (play time with its time zone, mods as a list); the same file twice is one row; five
@@ -502,7 +520,8 @@ bad file is `422`. Day 4's goal end to end: a replay playing map 22423 is upload
 map's objects removed; the map is fetched and then the replay analyzed by the worker (UR
 60, all 251 results stored), and uploading again returns the analysis and queues nothing.
 `GET /replays/{id}` then shows it analyzed with its map and every object in its results by
-pattern; an unknown replay is `404`.
+pattern, and its chart data has every note's timing and the cursor's full grid; an unknown
+replay is `404`.
 
 *Worker* (9, the full stack running): `fetch_beatmap` stores map 22423's 254 objects and
 refuses a taiko map. `fetch_replay_map` finds map 22423 by its checksum (and doesn't fetch
@@ -694,6 +713,11 @@ Both suites were checked against deliberately broken code:
   osu! row showing our counts, misses not standing out, and no upload link. Two first got
   through, both gaps in the tests (the next replay always answered at once; the sample's
   two rows of counts were equal); a test for each was added
+- `charts.py` and its endpoint (13 breaks): song time instead of real time or the rate the
+  wrong way, speed mods ignored, HR not flipped or flipped sideways, aim not rounded, the
+  join ignoring the map, notes out of map order, the playfield's right edge counted in,
+  rows and columns swapped, off-playfield frames not counted, charts of a pending replay,
+  and no `404`
 
 `.gitattributes` marks `.osu` files as binary: git's `\r\n` to `\n` conversion would change
 a map file's MD5 and break the fixtures on other machines.
@@ -727,6 +751,7 @@ src/osu_coach/
   difficulty.py  play conditions: mods applied, hit windows, circle radius, approach time
   judge.py     judge a replay hit by hit (lazer's rules): result, timing, aim, note lock
   analysis.py  analyze a stored replay: judge it, store UR, timing bias, aim, hit by hit
+  charts.py    the data behind a replay's charts: each note's timing, aim, place; cursor grid
   replays.py   store an upload (original, Parquet frames, row); fetch the replay's map
   sync.py      save a player and their scores from osu! (upserts, one transaction)
   config.py    settings from env / .env
