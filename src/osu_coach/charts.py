@@ -16,9 +16,10 @@ import polars as pl
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from osu_coach.difficulty import SPEED
+from osu_coach.difficulty import SPEED, play_conditions
 from osu_coach.judge import PLAYFIELD_HEIGHT
-from osu_coach.models import BeatmapObject, Replay, ReplayHit
+from osu_coach.models import Beatmap, BeatmapObject, Replay, ReplayHit
+from osu_coach.osufile import Difficulty
 from osu_coach.replays import load_frames
 
 PLAYFIELD_WIDTH = 512
@@ -51,8 +52,18 @@ class CursorGrid:
 
 
 @dataclass(frozen=True)
+class Windows:
+    """How far from a note's time (either way, in ms of real time) each result counts."""
+
+    great: float  # a 300
+    ok: float  # a 100
+    meh: float  # a 50
+
+
+@dataclass(frozen=True)
 class ReplayCharts:
     rate: float  # the song speed: 1.5 with DT, 0.75 with HT
+    windows: Windows
     notes: list[NotePoint]
     cursor: CursorGrid
 
@@ -112,11 +123,27 @@ def cursor_grid(frames: pl.DataFrame, cols: int = GRID_COLS, rows: int = GRID_RO
     return CursorGrid(cols, rows, counts, off_playfield=frames.height - on.height)
 
 
+def hit_windows(beatmap: Beatmap, mods: list[str]) -> Windows:
+    """The play's 300/100/50 windows in real time, from the map's OD and the mods."""
+    # The slider fields don't affect hit windows; play_conditions just needs a Difficulty.
+    difficulty = Difficulty(
+        hp=beatmap.hp, cs=beatmap.cs, od=beatmap.od, ar=beatmap.ar,
+        slider_multiplier=1, slider_tick_rate=1,
+    )  # fmt: skip
+    conditions = play_conditions(difficulty, mods)
+    w, rate = conditions.windows, conditions.rate
+    return Windows(round(w.great / rate, 2), round(w.ok / rate, 2), round(w.meh / rate, 2))
+
+
 async def replay_charts(session: AsyncSession, data_dir: Path, replay: Replay) -> ReplayCharts:
     """The charts' data for an analyzed replay (replay.beatmap_id set)."""
+    beatmap = await session.get(Beatmap, replay.beatmap_id)
+    if beatmap is None:  # analysis set beatmap_id, and analyzed maps can't be deleted
+        raise LookupError(f"replay {replay.id}'s map {replay.beatmap_id} is missing")
     frames = await asyncio.to_thread(load_frames, data_dir, replay.frames_path)
     return ReplayCharts(
         rate=song_rate(replay.mods),
+        windows=hit_windows(beatmap, replay.mods),
         notes=await note_points(session, replay),
         cursor=await asyncio.to_thread(cursor_grid, frames),
     )

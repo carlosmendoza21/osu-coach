@@ -25,8 +25,9 @@ docker compose up --build
   unknown id
 - `GET /replays/{id}/charts`: the data behind an analyzed replay's charts: each judged
   note's timing error (in real time), aim error, position as the player saw it (flipped
-  with HR) and pattern, and a 64 x 48 grid of where the cursor spent its time. `409`
-  until the replay is analyzed
+  with HR) and pattern, a 64 x 48 grid of where the cursor spent its time, and the play's
+  300/100/50 windows (from the map's OD and the mods, in real time). `409` until the
+  replay is analyzed
 - Postgres 16 + pgvector on `5432`, Redis on `6379`
 - The `migrate` service runs `alembic upgrade head` before the API and worker start.
 
@@ -66,7 +67,10 @@ npm run dev
 
 Pages: `/players/{name}` (a profile and its plays), `/replays/new` (upload an `.osr`), and
 `/replays/{id}` (a replay's analysis: counts against osu!'s, UR, timing, aim, results by
-pattern; it checks again every 2 s until the analysis is done).
+pattern, then three charts: hit timing over the 300/100/50 windows, UR over the map with
+each miss marked, and where the cursor was, with misses, 50s and 100s marked; it checks
+again every 2 s until the analysis is done). The charts (Recharts) load as a separate file,
+only on an analyzed replay's page.
 
 The dev server forwards `/api/...` to the API on port 8000 (`API_URL` to change it), so
 the page and the API share one address. Checks, as in CI's frontend job:
@@ -94,7 +98,7 @@ every push.
 On Windows, async database code needs a selector event loop (psycopg can't use the
 default one); `tests/conftest.py` sets it for the tests, and the worker task sets it too.
 
-**Unit tests** ([`tests/unit/`](tests/unit), 882 tests): call the code directly with nothing
+**Unit tests** ([`tests/unit/`](tests/unit), 891 tests): call the code directly with nothing
 running. `respx` fakes the osu! token endpoint (and blocks any unmocked request),
 `fakeredis` stands in for Redis, and the rate limiter gets a fake clock, so a 60 s window
 runs instantly.
@@ -302,7 +306,7 @@ no longer reports AR or OD with mods, so there's nothing live to check):
 - An unknown id is `404` and nothing else is looked up; an id that isn't a number is `422`;
   the documented responses are 200, 404 and 422
 
-*Chart data* (37, `GET /replays/{id}/charts`), on hand-made frames and a fake session:
+*Chart data* (46, `GET /replays/{id}/charts`), on hand-made frames and a fake session:
 - The cursor grid: 8 x 8 px cells by default, each frame in its cell (the corners, the
   middle, a cell's edges), the playfield's right and bottom edges outside it, frames off
   the playfield counted apart, every frame counted once, other grid sizes
@@ -311,6 +315,8 @@ no longer reports AR or OD with mods, so there's nothing live to check):
   pressed with no timing; the query joins this replay's map and keeps map order
 - The endpoint: the data with the configured data folder; `404` for no replay and `409`
   for one not analyzed (or with no map), reading no files; documented responses
+- The play's windows, worked out by hand: OD 10, 9.5 and 7, HR (OD 9.8), EZ, and DT/NC/HT
+  in real time (OD 7 with DT: 25, 55.67, 86.33 ms); a missing map says so
 
 *Worker tasks* (2): the tasks' names, and the errors declared as expected (`throws=`), so
 Celery logs a missing player, a taiko map, a changed map, an unknown replay, a map not
@@ -534,7 +540,7 @@ with `OsuNotFoundError`. It writes to the dev database, like the app.
 
 **Frontend tests** ([`frontend/`](frontend), Vitest; also run in CI):
 
-*Unit* (179, `npm test`), with `fetch` replaced:
+*Unit* (226, `npm test`), with `fetch` replaced:
 - `api.ts`: each call's URL, under the proxied `/api`, with player names escaped (a space,
   a slash or a `?` can't break the path); an upload posts the file as the `file` form
   field, without a hand-set Content-Type (the browser adds multipart's boundary); the JSON
@@ -577,14 +583,31 @@ with `OsuNotFoundError`. It writes to the dev database, like the app.
   every 2 s (not before) until analyzed; after 90 s it stops and explains; leaving the
   page or an error stops the checking; moving to another replay drops the last one at
   once, and its late answer never replaces the new one
+- Chart data: only hits (an early miss too is left out); 2 ms bins whose edges are whole
+  so 0 is always one, each error in its bin, errors past the 50 window in the outermost
+  bins; UR over each 50 hits (the population spread, hits in time order, a looser section
+  higher, one point when there are fewer, none under two); "1:23" times; square-root
+  shading (a quarter of the time is half the shade)
+- The heatmap's drawing, on a fake canvas: the playfield cleared, each visited cell shaded
+  by its time (the busiest fully), circles at each 100 and 50 and an x at each miss, none
+  for 300s
+- The charts, with Recharts given a fixed size: the histogram's three windows, its 0
+  line, a bar per bin with hits and an axis spanning the 50 window; UR's line, a red line
+  per miss and a time axis across the whole map in minutes; "too few hits" instead of an
+  empty chart; the heatmap's label and legend (and frames off the playfield), drawn with
+  the data, and nothing breaking without canvas support; the panel loading this replay's
+  charts, an error saying only the charts are missing, and a late answer for another
+  replay never replacing them
 
 *Live* (5, `npm run test:live`; needs the API running, skips otherwise): a real Vite dev
 server is started with `vite.config.ts`, and `api.ts` calls the API through its proxy:
 `/health` answers; an unknown replay is the API's `404` with its reason; an upload reaches
 the parser (so the form field name is right); peppy's profile and plays have exactly the
-fields `types.ts` declares, no more and no fewer, and every play comes with its map; and a real replay from `data/replays/`
-uploads and is checked until analyzed, as the replay page does, with its detail's fields
-(every pattern's too) as declared and our counts matching osu!'s.
+fields `types.ts` declares, no more and no fewer, and every play comes with its map; and a
+real replay from `data/replays/` uploads and is checked until analyzed, as the replay page
+does, with its detail's fields (every pattern's too) as declared and our counts matching
+osu!'s; its chart data has the declared fields and exactly the notes and misses its
+analysis counted.
 
 Both suites were checked against deliberately broken code:
 - `auth.py`: removing the expiry margin, the `400`/`401` check, or the cache read, sending
@@ -718,6 +741,15 @@ Both suites were checked against deliberately broken code:
   join ignoring the map, notes out of map order, the playfield's right edge counted in,
   rows and columns swapped, off-playfield frames not counted, charts of a pending replay,
   and no `404`
+- The replay charts (18 breaks): bin edges not whole, far errors lost, misses counted as
+  hits, hits out of time order, a sample spread, UR over everything so far, unpadded
+  seconds, linear shading, 300s marked, cells transposed, no check for a 2D context, the
+  UR axis starting at its first point, no miss lines, the 300 window not shaded, late
+  charts not ignored, the last replay's charts kept; and windows in song time or ignoring
+  mods. Two gaps showed while writing the tests: the UR axis started at the first point,
+  hiding any miss in a map's first 50 notes (fixed: it spans the whole map), and a tick
+  test passed on an empty list (fixed: it needs ticks). Late charts first got through,
+  since no test had the old replay answer last; one does now
 
 `.gitattributes` marks `.osu` files as binary: git's `\r\n` to `\n` conversion would change
 a map file's MD5 and break the fixtures on other machines.

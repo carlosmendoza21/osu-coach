@@ -25,13 +25,14 @@ from osu_coach.charts import (
     CursorGrid,
     NotePoint,
     ReplayCharts,
+    Windows,
     cursor_grid,
     note_points,
     song_rate,
 )
 from osu_coach.db import get_session
 from osu_coach.main import create_app
-from osu_coach.models import Replay
+from osu_coach.models import Beatmap, Replay
 from osu_coach.replays import FRAME_SCHEMA
 
 PG = postgresql.dialect()  # type: ignore[no-untyped-call]  # SQLAlchemy leaves it untyped
@@ -225,6 +226,7 @@ async def test_the_query_joins_this_replays_map() -> None:
 
 CHARTS = ReplayCharts(
     rate=1.5,
+    windows=Windows(13.0, 39.67, 66.33),
     notes=[NotePoint(0, 1000, "300", -4.0, 2.5, 10.0, 20.0, "jump")],
     cursor=CursorGrid(2, 1, [3, 4], off_playfield=1),
 )
@@ -269,6 +271,7 @@ async def test_the_charts(cenv: ChartsEnv) -> None:
     assert resp.status_code == 200
     assert resp.json() == {
         "rate": 1.5,
+        "windows": {"great": 13.0, "ok": 39.67, "meh": 66.33},
         "notes": [
             {"idx": 0, "time_ms": 1000, "result": "300", "error_ms": -4.0, "aim_error_px": 2.5,
              "x": 10.0, "y": 20.0, "pattern": "jump"},
@@ -325,8 +328,48 @@ async def test_replay_charts_puts_the_parts_together(
 
     monkeypatch.setattr(charts, "note_points", points)
 
-    result = await charts.replay_charts(cast(AsyncSession, None), tmp_path, row)
+    async def get(model: type, key: int) -> Beatmap:
+        return Beatmap(id=key, od=10, cs=4, ar=10, hp=5)
+
+    session = cast(AsyncSession, SimpleNamespace(get=get))
+    result = await charts.replay_charts(session, tmp_path, row)
 
     assert result.rate == 1.5
     assert result.notes == [CHARTS.notes[0]]
     assert (sum(result.cursor.counts), result.cursor.off_playfield) == (1, 1)
+
+
+# ---------- hit_windows ----------
+
+
+def beatmap(od: float) -> Beatmap:
+    return Beatmap(id=1, od=od, cs=4, ar=9, hp=5)
+
+
+@pytest.mark.parametrize(
+    ("od", "mods", "windows"),
+    [
+        # 80 - 6 OD, 140 - 8 OD, 200 - 10 OD, each rounded down, minus half a ms.
+        (10, [], Windows(19.5, 59.5, 99.5)),
+        (9.5, [], Windows(22.5, 63.5, 104.5)),  # gwb's Split EX
+        (7, [], Windows(37.5, 83.5, 129.5)),  # map 22423
+        (7, ["HR"], Windows(20.5, 60.5, 101.5)),  # OD 7 x 1.4 = 9.8: 21.2, 61.6, 102
+        (7, ["EZ"], Windows(58.5, 111.5, 164.5)),  # OD 3.5
+        # Speed mods: the same song-time windows, passing faster or slower in real time.
+        (7, ["DT"], Windows(25.0, 55.67, 86.33)),
+        (7, ["HT"], Windows(50.0, 111.33, 172.67)),
+        (10, ["HD", "NC"], Windows(13.0, 39.67, 66.33)),
+    ],
+)
+def test_hit_windows(od: float, mods: list[str], windows: Windows) -> None:
+    assert charts.hit_windows(beatmap(od), mods) == windows
+
+
+async def test_replay_charts_without_its_map(tmp_path: Path) -> None:
+    # Can't happen through the code (analyzed maps can't be deleted), but says so if it does.
+    async def get(model: type, key: int) -> None:
+        return None
+
+    row = replay_row()
+    with pytest.raises(LookupError, match="replay 7's map 22423 is missing"):
+        await charts.replay_charts(cast(AsyncSession, SimpleNamespace(get=get)), tmp_path, row)

@@ -110,3 +110,22 @@ export interface ReplayDetail {
   matches_official: boolean | null
   by_pattern: Record<string, HitCounts> // {"stream": {"300": 532, ...}}
 }
+
+// GET /replays/{id}/charts
+export interface ChartNote {
+  idx: number
+  time_ms: number // song time: the map's clock
+  result: HitResult
+  error_ms: number | null // real time; negative is early; null if never pressed
+  aim_error_px: number | null
+  x: number // as the player saw it (flipped with HR)
+  y: number
+  pattern: string
+}
+
+export interface ReplayCharts {
+  rate: number // 1.5 with DT, 0.75 with HT
+  windows: { great: number; ok: number; meh: number } // +- ms of real time
+  notes: ChartNote[]
+  cursor: { cols: number; rows: number; counts: number[]; off_playfield: number }
+}

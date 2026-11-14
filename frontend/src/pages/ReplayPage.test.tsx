@@ -17,6 +17,9 @@ beforeEach(() => {
   vi.stubGlobal(
     'fetch',
     vi.fn((url: string) => {
+      // The charts ask for their own data once a replay is analyzed: never answered
+      // here (src/components/ReplayChartsPanel.test.tsx covers them), and not counted.
+      if (url.endsWith('/charts')) return new Promise<Response>(() => {})
       urls.push(url)
       const next = answers.length > 1 ? answers.shift()! : answers[0]
       return next()

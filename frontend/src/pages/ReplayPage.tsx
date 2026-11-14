@@ -1,10 +1,13 @@
-import { useEffect, useState } from 'react'
+import { Suspense, lazy, useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router'
 
 import { getReplay } from '../api'
 import ReplayAnalysis, { ReplayHeader } from '../components/ReplayAnalysis'
 import { replayError } from '../errors'
 import type { ReplayDetail } from '../types'
+
+// The charts (and Recharts with them) load only when a replay's analysis is shown.
+const ReplayChartsPanel = lazy(() => import('../components/ReplayChartsPanel'))
 
 export const POLL_MS = 2000 // how often to check a pending replay
 export const GIVE_UP_MS = 90_000 // a map fetch and analysis take a few seconds, not minutes
@@ -73,7 +76,12 @@ export default function ReplayPage() {
     <>
       <ReplayHeader detail={detail} />
       {detail.status === 'analyzed' ? (
-        <ReplayAnalysis detail={detail} />
+        <>
+          <ReplayAnalysis detail={detail} />
+          <Suspense fallback={<p className="muted">Loading the charts...</p>}>
+            <ReplayChartsPanel id={detail.replay.id} />
+          </Suspense>
+        </>
       ) : gaveUp ? (
         <p role="alert" className="error">
           The analysis is taking longer than expected. osu! may be slow, or the map may have

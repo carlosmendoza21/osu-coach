@@ -293,3 +293,47 @@ table.patterns td.miss {
 .match.off {
   color: var(--muted);
 }
+
+/* ---------- Charts ---------- */
+
+.charts {
+  display: grid;
+  gap: 1.5rem;
+  margin: 1.5rem 0;
+}
+
+.chart {
+  margin: 0;
+}
+
+.chart figcaption {
+  font-weight: 600;
+  font-size: 1.1rem;
+  margin-bottom: 0.5rem;
+}
+
+.heatmap canvas {
+  display: block;
+  width: 100%;
+  max-width: 640px;
+  height: auto;
+  aspect-ratio: 512 / 384;
+  border-radius: 6px;
+}
+
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  font-size: 0.9rem;
+}
+
+/* Recharts' axes and tooltips in the page's colours */
+.recharts-cartesian-axis-tick-value {
+  fill: var(--muted);
+}
+
+.recharts-default-tooltip {
+  background: var(--bg) !important;
+  border-color: color-mix(in srgb, var(--muted) 40%, transparent) !important;
+}

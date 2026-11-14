@@ -11,11 +11,13 @@ import { resolve } from 'node:path'
 import { type ViteDevServer, createServer } from 'vite'
 import { afterAll, beforeAll, describe, expect, test, vi } from 'vitest'
 
-import { ApiError, getHealth, getPlayer, getReplay, uploadReplay } from '../src/api'
+import { ApiError, getHealth, getPlayer, getReplay, getReplayCharts, uploadReplay } from '../src/api'
 import type {
   Beatmap,
+  ChartNote,
   Player,
   Replay,
+  ReplayCharts,
   ReplayDetail,
   Score,
   ScoreMap,
@@ -44,6 +46,9 @@ const BEATMAP = { id: 1, beatmapset_id: 1, artist: 1, title: 1, creator: 1, vers
   length_s: 1 } satisfies Record<keyof Beatmap, 1>
 const UPLOAD = { replay: 1, created: 1, map_job_id: 1,
   analysis_job_id: 1 } satisfies Record<keyof UploadResponse, 1>
+const CHARTS = { rate: 1, windows: 1, notes: 1, cursor: 1 } satisfies Record<keyof ReplayCharts, 1>
+const NOTE = { idx: 1, time_ms: 1, result: 1, error_ms: 1, aim_error_px: 1, x: 1, y: 1,
+  pattern: 1 } satisfies Record<keyof ChartNote, 1>
 const DETAIL = { replay: 1, beatmap: 1, status: 1, judged: 1, matches_official: 1,
   by_pattern: 1 } satisfies Record<keyof ReplayDetail, 1>
 
@@ -144,6 +149,17 @@ describe.skipIf(!apiUp)('through the dev server, against the real API', () => {
       if (detail.beatmap) expect(fields(detail.beatmap)).toEqual(expected(BEATMAP))
       expect(fields(detail.judged ?? {})).toEqual(['100', '300', '50', 'miss'])
       expect(detail.matches_official).toBe(true) // our counts equal osu!'s
+
+      // Its charts: the declared fields, and the same notes the analysis counted.
+      const charts = await getReplayCharts(upload.replay.id)
+      expect(fields(charts)).toEqual(expected(CHARTS))
+      expect(fields(charts.windows)).toEqual(['great', 'meh', 'ok'])
+      expect(fields(charts.cursor)).toEqual(['cols', 'counts', 'off_playfield', 'rows'])
+      for (const n of charts.notes) expect(fields(n)).toEqual(expected(NOTE))
+      const judged = detail.judged ?? { '300': 0, '100': 0, '50': 0, miss: 0 }
+      expect(charts.notes).toHaveLength(judged['300'] + judged['100'] + judged['50'] + judged.miss)
+      expect(charts.notes.filter((n) => n.result === 'miss')).toHaveLength(judged.miss)
+      expect(charts.cursor.counts).toHaveLength(charts.cursor.cols * charts.cursor.rows)
     },
   )
 })

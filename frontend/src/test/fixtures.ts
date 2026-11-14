@@ -1,5 +1,5 @@
 // Sample API data for tests, shaped like the real responses (src/types.ts).
-import type { PlayerResponse, ReplayDetail, Score } from '../types'
+import type { ChartNote, PlayerResponse, ReplayCharts, ReplayDetail, Score } from '../types'
 
 export function score(changes: Partial<Score> = {}): Score {
   return {
@@ -113,5 +113,39 @@ export function pendingDetail(withMap = true): ReplayDetail {
     judged: null,
     matches_official: null,
     by_pattern: {},
+  }
+}
+
+export function note(changes: Partial<ChartNote> = {}): ChartNote {
+  return {
+    idx: 0,
+    time_ms: 1000,
+    result: '300',
+    error_ms: 0,
+    aim_error_px: 5,
+    x: 256,
+    y: 192,
+    pattern: 'stream',
+    ...changes,
+  }
+}
+
+/** Chart data like gwb's Split EX: OD 9.5, a few 100s, a 50 and misses. */
+export function chartsData(changes: Partial<ReplayCharts> = {}): ReplayCharts {
+  const cols = 4
+  const rows = 3
+  return {
+    rate: 1,
+    windows: { great: 22.5, ok: 63.5, meh: 104.5 },
+    notes: [
+      note({ idx: 0, time_ms: 1000, error_ms: -2 }),
+      note({ idx: 1, time_ms: 1200, error_ms: 3 }),
+      note({ idx: 2, time_ms: 1400, result: '100', error_ms: -40, x: 100, y: 100 }),
+      note({ idx: 3, time_ms: 1600, result: '50', error_ms: 80, x: 400, y: 50 }),
+      note({ idx: 4, time_ms: 1800, result: 'miss', error_ms: null, aim_error_px: null, x: 50, y: 300 }),
+      note({ idx: 5, time_ms: 2000, error_ms: 1 }),
+    ],
+    cursor: { cols, rows, counts: [0, 1, 4, 0, 9, 16, 0, 0, 0, 0, 0, 1], off_playfield: 3 },
+    ...changes,
   }
 }

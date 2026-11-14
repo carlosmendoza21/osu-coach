@@ -381,6 +381,7 @@ async def test_charts_of_an_analyzed_replay(db: AsyncEngine, tmp_path: Path) -> 
 
     notes = body["notes"]
     assert body["rate"] == 1.0
+    assert body["windows"] == {"great": 37.5, "ok": 83.5, "meh": 129.5}  # map 22423 is OD 7
     assert [n["idx"] for n in notes] == [
         i for i, h in enumerate(MAP.hit_objects) if h.kind != "spinner"
     ]  # every circle and slider head, in map order
@@ -404,6 +405,7 @@ async def test_charts_of_a_dt_play_are_in_real_time(db: AsyncEngine, tmp_path: P
 
     assert body["rate"] == 1.5
     assert {n["error_ms"] for n in body["notes"]} == {-4.0, 4.0}  # 6 ms of song time / 1.5
+    assert body["windows"] == {"great": 25.0, "ok": 55.67, "meh": 86.33}  # real time too
 
 
 async def test_charts_of_an_hr_play_are_flipped(db: AsyncEngine, tmp_path: Path) -> None:

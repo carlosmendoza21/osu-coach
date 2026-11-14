@@ -1,5 +1,5 @@
 // Calls to the backend. In development Vite forwards /api/... to it (vite.config.ts).
-import type { PlayerResponse, ReplayDetail, UploadResponse } from './types'
+import type { PlayerResponse, ReplayCharts, ReplayDetail, UploadResponse } from './types'
 
 export const API_BASE = '/api'
 
@@ -50,6 +50,10 @@ export function getPlayer(username: string): Promise<PlayerResponse> {
 
 export function getReplay(id: number): Promise<ReplayDetail> {
   return request(`/replays/${id}`)
+}
+
+export function getReplayCharts(id: number): Promise<ReplayCharts> {
+  return request(`/replays/${id}/charts`)
 }
 
 export function uploadReplay(file: File): Promise<UploadResponse> {

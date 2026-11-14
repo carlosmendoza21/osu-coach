@@ -239,10 +239,19 @@ class CursorGridOut(BaseModel):
     off_playfield: int
 
 
+class WindowsOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    great: float  # +- ms of real time for a 300
+    ok: float  # a 100
+    meh: float  # a 50
+
+
 class ChartsOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     rate: float
+    windows: WindowsOut
     notes: list[NoteOut]
     cursor: CursorGridOut
 
