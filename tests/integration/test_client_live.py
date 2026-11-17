@@ -186,3 +186,34 @@ async def test_bad_checksum_never_reaches_osu(live: Live) -> None:
         await live.osu.lookup_beatmap("not-a-hash")
 
     assert live.api_requests() == 0
+
+
+# ---------- Beatmap attributes (a POST) ----------
+
+
+async def test_attributes_match_the_maps_star_rating(live: Live) -> None:
+    beatmap = await live.osu.get_beatmap(22423)
+    attrs = await live.osu.get_beatmap_attributes(22423, [])
+
+    # Nomod, osu!'s two answers agree: the map's star rating is its attributes'.
+    assert attrs.star_rating == pytest.approx(beatmap.difficulty_rating, abs=0.01)
+    assert attrs.max_combo == beatmap.max_combo
+    assert 0 < attrs.speed_difficulty < attrs.star_rating
+    assert 0 < attrs.aim_difficulty < attrs.star_rating
+
+
+async def test_attributes_with_mods(live: Live) -> None:
+    nomod = await live.osu.get_beatmap_attributes(22423, [])
+    dt = await live.osu.get_beatmap_attributes(22423, ["DT"])
+    nc = await live.osu.get_beatmap_attributes(22423, ["NC"])
+    sd = await live.osu.get_beatmap_attributes(22423, ["SD"])
+
+    assert dt.star_rating > nomod.star_rating
+    # The mod keys' assumptions, checked against osu! itself: NC is DT, SD changes nothing.
+    assert nc == dt
+    assert sd == nomod
+
+
+async def test_attributes_of_an_unknown_map(live: Live) -> None:
+    with pytest.raises(OsuNotFoundError):
+        await live.osu.get_beatmap_attributes(999_999_999, [])

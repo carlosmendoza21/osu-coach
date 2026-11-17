@@ -22,7 +22,7 @@ from osu_coach.osu.schemas import OsuScore, OsuUser
 from osu_coach.osufile import parse_osu
 from osu_coach.patterns import object_features
 from osu_coach.sync import beatmap_values, player_values, score_values
-from tests.support import FIXTURES, ROOT, alembic, load
+from tests.support import ALL_TABLES, FIXTURES, ROOT, alembic, load
 
 pytestmark = pytest.mark.integration
 
@@ -35,7 +35,7 @@ def session(engine: Engine) -> Iterator[Session]:
         yield s
         s.rollback()
     with engine.begin() as conn:  # each test starts from empty tables
-        conn.execute(text("TRUNCATE players, scores, beatmaps, hit_objects, replays, hit_results"))
+        conn.execute(text(f"TRUNCATE {ALL_TABLES}"))
 
 
 # The rows come from the same mapping the sync uses, so these tests cover it too.

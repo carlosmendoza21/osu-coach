@@ -98,7 +98,7 @@ every push.
 On Windows, async database code needs a selector event loop (psycopg can't use the
 default one); `tests/conftest.py` sets it for the tests, and the worker task sets it too.
 
-**Unit tests** ([`tests/unit/`](tests/unit), 891 tests): call the code directly with nothing
+**Unit tests** ([`tests/unit/`](tests/unit), 921 tests): call the code directly with nothing
 running. `respx` fakes the osu! token endpoint (and blocks any unmocked request),
 `fakeredis` stands in for Redis, and the rate limiter gets a fake clock, so a 60 s window
 runs instantly.
@@ -158,7 +158,7 @@ and a full beatmap):
   mapset is not typed as a difficulty; a score's partial beatmap isn't accepted as a full
   one
 
-*API client* (50), with osu! faked by `respx`, fakeredis, a fake clock for the rate limiter,
+*API client* (56), with osu! faked by `respx`, fakeredis, a fake clock for the rate limiter,
 and recorded retry waits:
 - Requests: users by id (`key=id`) or username (`key=username`, escaped: spaces,
   brackets, `/`, and all-digit names), best and recent scores with the right `mode`,
@@ -170,6 +170,8 @@ and recorded retry waits:
   is an error, not a loop
 - `404` raises `OsuNotFoundError`; other errors raise `OsuApiError` (its parent); errors
   never contain the token or secret
+- A map's difficulty attributes: a POST with the mods and `"ruleset": "osu"` as JSON,
+  through the same rate limit, retries and token refresh as the GETs; `404` is not found
 - Beatmaps by id, and by the MD5 checksum a replay records: sent as `?checksum=` (not in
   the path), lowercased first; 8 kinds of bad checksum (wrong length, not hex, spaces, a
   trailing newline, dashes) are refused before any request, token fetch or rate-limit
@@ -306,6 +308,15 @@ no longer reports AR or OD with mods, so there's nothing live to check):
 - An unknown id is `404` and nothing else is looked up; an id that isn't a number is `422`;
   the documented responses are 200, 404 and 422
 
+*Map attributes* (24), on osu!'s real answers for map 22423 (nomod and DT):
+- The model: every field parsed (star rating, aim, speed, speed notes, slider factor,
+  hard-to-aim and hard-to-tap counts), DT harder than nomod, fields osu! adds ignored, a
+  missing field an error, read-only
+- Mod keys: sorted, "" for none, NC as DT and DC as HT (osu!'s answers are identical), NF,
+  SD and PF dropped (they can't change difficulty), HD, FL, EZ and Classic kept
+- Storing: one upsert keyed by map and mods, replacing the values but not the fetch time,
+  and every attribute has its column
+
 *Chart data* (46, `GET /replays/{id}/charts`), on hand-made frames and a fake session:
 - The cursor grid: 8 x 8 px cells by default, each frame in its cell (the corners, the
   middle, a cell's edges), the playfield's right and bottom edges outside it, frames off
@@ -379,7 +390,7 @@ statements are compiled to Postgres SQL:
   in one query for both lists, and none at all for a player with no scores; a map that
   isn't stored is `null` rather than dropping the score
 
-**Integration tests** ([`tests/integration/`](tests/integration), 174 tests): use real
+**Integration tests** ([`tests/integration/`](tests/integration), 190 tests): use real
 Redis, real time, real processes, and the real osu! API with the credentials in `.env`.
 They skip with the reason if Redis isn't running (`docker compose up -d redis`) or the
 credentials are missing, and clean up their Redis keys even if a check fails.
@@ -403,7 +414,7 @@ credentials are missing, and clean up their Redis keys even if a check fails.
   username, 50 best scores each for the top 3, and recent plays including fails
 - An unknown username returns `404`
 
-*API client* (13, real osu! and Redis):
+*API client* (16, real osu! and Redis):
 - The same player by username and by id; 50 best scores, best first, and `limit=5`
   matching the first five; recent plays of the current top 10
 - Unknown usernames, including the all-digit `"2"`, raise `OsuNotFoundError`
@@ -412,6 +423,9 @@ credentials are missing, and clean up their Redis keys even if a check fails.
 - Beatmap 22423 matches the saved fixture; looking it up by its checksum (either case)
   finds the same map, as does looking up a real score's map; unknown ids and checksums
   are not found; a bad checksum never reaches osu!
+- Map attributes: nomod, the star rating and max combo are the map's own; DT is harder;
+  and osu! itself confirms the mod keys' assumptions: NC's answer equals DT's and SD's
+  equals nomod's; an unknown map is not found
 
 *Database* (24, Postgres only; also run in CI): a separate `<db>_test` database is created,
 migrated with Alembic exactly as deployment does, and dropped afterwards
@@ -529,14 +543,24 @@ map's objects removed; the map is fetched and then the replay analyzed by the wo
 pattern, and its chart data has every note's timing and the cursor's full grid; an unknown
 replay is `404`.
 
-*Worker* (9, the full stack running): `fetch_beatmap` stores map 22423's 254 objects and
+*Map attributes* (12, Postgres; also run in CI), two players and four maps: a player
+needs each of their osu! standard maps under each mod key (map 1 nomod, HD, and DT for
+both DT and NC; map 2 nomod for a PF play), not the taiko map or another player's;
+stored pairs drop off, also when stored for another player (they belong to the map).
+Fetching stores every pair with its normalized mods and then asks for nothing; a map
+osu! no longer has is skipped and counted; a failure part-way keeps what was fetched,
+and the next run asks only for the rest. Storing again replaces the values; deleting a
+map deletes its attributes; attributes need their map; the database sets the time.
+
+*Worker* (10, the full stack running): `fetch_beatmap` stores map 22423's 254 objects and
 refuses a taiko map. `fetch_replay_map` finds map 22423 by its checksum (and doesn't fetch
 it again, in either letter case), and fails with `OsuNotFoundError` for an unknown file.
 `analyze_replay` fails with `ReplayNotFoundError` for a replay that doesn't exist. A sync queues `fetch_beatmap` for the player's maps without objects
 (a removed map is fetched back with all 254 objects), and a second sync queues none.
 `osu_sync` through the real Celery worker returns
 peppy's summary, repeated syncs don't duplicate rows, and an unknown player fails the task
-with `OsuNotFoundError`. It writes to the dev database, like the app.
+with `OsuNotFoundError`. `fetch_attributes` leaves none of peppy's plays without
+attributes, and a second run fetches none. It writes to the dev database, like the app.
 
 **Frontend tests** ([`frontend/`](frontend), Vitest; also run in CI):
 
@@ -750,6 +774,11 @@ Both suites were checked against deliberately broken code:
   hiding any miss in a map's first 50 notes (fixed: it spans the whole map), and a tick
   test passed on an empty list (fixed: it needs ticks). Late charts first got through,
   since no test had the old replay answer last; one does now
+- Map attributes (15 breaks): NC not merged with DT, PF kept, HD dropped, keys in reverse
+  order, other modes or every player's plays included, stored pairs fetched again, gone
+  maps not skipped, one commit at the end, storing again keeping the old values, the mods
+  not sent, no `ruleset`, a GET instead of a POST, the JSON body not sent, and the
+  migration without CASCADE
 
 `.gitattributes` marks `.osu` files as binary: git's `\r\n` to `\n` conversion would change
 a map file's MD5 and break the fixtures on other machines.
@@ -784,6 +813,7 @@ src/osu_coach/
   judge.py     judge a replay hit by hit (lazer's rules): result, timing, aim, note lock
   analysis.py  analyze a stored replay: judge it, store UR, timing bias, aim, hit by hit
   charts.py    the data behind a replay's charts: each note's timing, aim, place; cursor grid
+  attributes.py  osu!'s aim/speed difficulty for each played map and mods (fetch_attributes)
   replays.py   store an upload (original, Parquet frames, row); fetch the replay's map
   sync.py      save a player and their scores from osu! (upserts, one transaction)
   config.py    settings from env / .env

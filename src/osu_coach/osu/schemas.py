@@ -110,3 +110,26 @@ class OsuBeatmap(ScoreBeatmap):
 
     max_combo: int | None  # osu! can send null for maps it hasn't processed
     beatmapset: ScoreBeatmapset  # artist, title, creator
+
+
+# ---------- POST /beatmaps/{beatmap}/attributes ----------
+
+
+class DifficultyAttributes(OsuModel):
+    """A map's difficulty with some mods, as osu!'s star rating calculation sees it.
+
+    The `attributes` object of the response. osu! doesn't send AR or OD here.
+    """
+
+    star_rating: float
+    max_combo: int
+    aim_difficulty: float  # the aim part of the star rating
+    speed_difficulty: float  # the speed (tapping) part
+    speed_note_count: float  # how many notes count as hard to tap
+    slider_factor: float  # 1 when sliders add no aim difficulty, lower when they do
+    aim_difficult_strain_count: float  # how many parts of the map are hard to aim
+    speed_difficult_strain_count: float  # ...and hard to tap
+
+
+class AttributesResponse(OsuModel):
+    attributes: DifficultyAttributes

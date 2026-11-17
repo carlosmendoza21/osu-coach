@@ -26,7 +26,7 @@ from osu_coach.osu.client import OsuApiError, OsuClient
 from osu_coach.osu.ratelimiter import RateLimiter
 from osu_coach.osu.schemas import OsuBeatmap, OsuScore
 from osu_coach.sync import SyncResult, beatmap_values, sync_player, upsert_beatmaps
-from tests.support import FakeOsu, best_scores, failed_score, load
+from tests.support import ALL_TABLES, FakeOsu, best_scores, failed_score, load
 
 pytestmark = pytest.mark.integration
 
@@ -45,7 +45,7 @@ async def db(test_url: URL) -> AsyncIterator[AsyncEngine]:
 def empty_tables(engine: Engine) -> Iterator[None]:
     yield
     with engine.begin() as conn:  # each test starts from empty tables
-        conn.execute(text("TRUNCATE players, scores, beatmaps, hit_objects, replays, hit_results"))
+        conn.execute(text(f"TRUNCATE {ALL_TABLES}"))
 
 
 async def sync(db: AsyncEngine, osu: FakeOsu | OsuClient, who: int | str = 2) -> SyncResult:

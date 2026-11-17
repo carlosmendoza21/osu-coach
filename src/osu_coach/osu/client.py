@@ -13,7 +13,13 @@ from pydantic import TypeAdapter
 from osu_coach.osu.auth import TokenProvider
 from osu_coach.osu.ratelimiter import RateLimiter
 from osu_coach.osu.retry import DEFAULT_POLICY, RetryPolicy, send_with_retries
-from osu_coach.osu.schemas import OsuBeatmap, OsuScore, OsuUser
+from osu_coach.osu.schemas import (
+    AttributesResponse,
+    DifficultyAttributes,
+    OsuBeatmap,
+    OsuScore,
+    OsuUser,
+)
 
 API_URL = "https://osu.ppy.sh/api/v2"
 MAX_SCORES = 100  # the API caps /scores/best and /scores/recent at 100
@@ -48,6 +54,19 @@ class OsuClient:
 
     async def _get(self, path: str, params: dict[str, Any] | None = None) -> httpx.Response:
         """GET an API path with auth, rate limiting and retries. Returns a 2xx response."""
+        return await self._request("GET", path, params=params)
+
+    async def _request(
+        self,
+        method: str,
+        path: str,
+        params: dict[str, Any] | None = None,
+        json: dict[str, Any] | None = None,
+    ) -> httpx.Response:
+        """Send a request with auth, rate limiting and retries. Returns a 2xx response.
+
+        Only for requests that are safe to send again (reads): a retry repeats them.
+        """
         url = f"{API_URL}{path}"
 
         async def send() -> httpx.Response:
@@ -56,7 +75,7 @@ class OsuClient:
             await self.limiter.acquire()
             token = await self.tokens.get_token()
             headers = {"Authorization": f"Bearer {token}"}
-            return await self.http.get(url, headers=headers, params=params)
+            return await self.http.request(method, url, headers=headers, params=params, json=json)
 
         response = await send_with_retries(send, self.retry_policy, self.sleep, self.rand)
 
@@ -110,6 +129,17 @@ class OsuClient:
         """A beatmap (one difficulty) by its id."""
         response = await self._get(f"/beatmaps/{beatmap_id}")
         return OsuBeatmap.model_validate_json(response.content)
+
+    async def get_beatmap_attributes(
+        self, beatmap_id: int, mods: list[str]
+    ) -> DifficultyAttributes:
+        """A map's difficulty with these mods (acronyms, e.g. ["HD", "DT"]), for osu! standard.
+
+        A POST, but it only reads: osu! takes the mods in the body.
+        """
+        body = {"mods": mods, "ruleset": "osu"}
+        response = await self._request("POST", f"/beatmaps/{beatmap_id}/attributes", json=body)
+        return AttributesResponse.model_validate_json(response.content).attributes
 
     async def lookup_beatmap(self, checksum: str) -> OsuBeatmap:
         """A beatmap by the MD5 checksum of its .osu file (what a replay records)."""

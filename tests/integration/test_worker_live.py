@@ -19,6 +19,7 @@ from osu_coach.osu.client import OsuNotFoundError
 from osu_coach.worker import (
     analyze_replay,
     celery_app,
+    fetch_attributes,
     fetch_beatmap,
     fetch_replay_map,
     osu_sync,
@@ -142,3 +143,24 @@ def test_analyze_replay_for_an_unknown_replay() -> None:
         task.get(timeout=TIMEOUT_S)
 
     assert task.state == "FAILURE"
+
+
+def test_fetch_attributes_through_the_worker() -> None:
+    # peppy's plays: a sync stores them (and queues this task too); then any pairs still
+    # missing are fetched, and a second run finds none.
+    osu_sync.delay(2).get(timeout=TIMEOUT_S)
+    fetch_attributes.delay(2).get(timeout=TIMEOUT_S)
+
+    again = fetch_attributes.delay(2).get(timeout=TIMEOUT_S)
+
+    assert again == {"osu_id": 2, "fetched": 0, "not_found": 0}
+    engine = create_engine(get_settings().database_url)
+    with engine.connect() as conn:
+        sql = (
+            "SELECT count(*) FROM scores s JOIN beatmaps b ON b.id = s.beatmap_id "
+            "WHERE s.player_id = 2 AND b.mode = 'osu' AND NOT EXISTS "
+            "(SELECT 1 FROM beatmap_attributes a WHERE a.beatmap_id = s.beatmap_id)"
+        )
+        plays_without_any = conn.execute(text(sql)).scalar()
+    engine.dispose()
+    assert plays_without_any == 0

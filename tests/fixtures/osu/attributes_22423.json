@@ -1,0 +1,13 @@
+{
+  "attributes": {
+    "star_rating": 3.5646700859069824,
+    "max_combo": 450,
+    "aim_difficulty": 1.8561400175094604,
+    "aim_difficult_slider_count": 67.4800033569336,
+    "speed_difficulty": 1.5995399951934814,
+    "speed_note_count": 33.653499603271484,
+    "slider_factor": 0.9270830154418945,
+    "aim_difficult_strain_count": 68.87930297851562,
+    "speed_difficult_strain_count": 28.909799575805664
+  }
+}

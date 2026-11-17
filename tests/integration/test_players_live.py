@@ -31,7 +31,7 @@ from osu_coach.main import create_app
 from osu_coach.models import Beatmap, Player, Score
 from osu_coach.osu.client import OsuClient, OsuNotFoundError
 from osu_coach.sync import beatmap_values, player_values, score_values, sync_player
-from tests.support import FakeOsu, best_scores, failed_score, user
+from tests.support import ALL_TABLES, FakeOsu, best_scores, failed_score, user
 
 pytestmark = pytest.mark.integration
 
@@ -54,7 +54,7 @@ async def db(test_url: URL) -> AsyncIterator[AsyncEngine]:
 def empty_tables(engine: Engine) -> Iterator[None]:
     yield
     with engine.begin() as conn:  # each test starts from empty tables
-        conn.execute(text("TRUNCATE players, scores, beatmaps, hit_objects, replays, hit_results"))
+        conn.execute(text(f"TRUNCATE {ALL_TABLES}"))
 
 
 @pytest.fixture

@@ -489,3 +489,61 @@ async def test_beatmap_requests_take_rate_limit_slots(env: Env, osu: OsuClient) 
     await osu.lookup_beatmap(CHECKSUM)
 
     assert await env.redis.zcard(RATE_KEY) == 2
+
+
+# ---------- Beatmap attributes (a POST) ----------
+
+
+ATTRIBUTES_URL = f"{API_URL}/beatmaps/22423/attributes"
+
+
+@pytest.mark.parametrize("mods", [[], ["DT"], ["DT", "HD"]])
+async def test_get_beatmap_attributes(env: Env, osu: OsuClient, mods: list[str]) -> None:
+    route = env.router.post(ATTRIBUTES_URL).mock(
+        return_value=httpx.Response(200, json=load("attributes_22423_dt.json"))
+    )
+
+    attrs = await osu.get_beatmap_attributes(22423, mods)
+
+    assert attrs.star_rating == pytest.approx(4.982, rel=1e-3)
+    assert attrs.aim_difficulty == pytest.approx(2.5597, rel=1e-3)
+    request = route.calls.last.request
+    assert request.method == "POST"
+    # The mods and the game mode go in the body, as JSON.
+    assert json.loads(request.content) == {"mods": mods, "ruleset": "osu"}
+    assert request.headers["Content-Type"] == "application/json"
+    assert request.headers["Authorization"] == f"Bearer {TOKEN}"
+
+
+async def test_attributes_are_rate_limited_and_retried(env: Env, osu: OsuClient) -> None:
+    # The POST goes through the same plumbing as the GETs: a slot per attempt, retries.
+    env.router.post(ATTRIBUTES_URL).mock(
+        side_effect=[httpx.Response(503), httpx.Response(200, json=load("attributes_22423.json"))]
+    )
+
+    attrs = await osu.get_beatmap_attributes(22423, [])
+
+    assert attrs.max_combo == 450
+    assert await env.redis.zcard(RATE_KEY) == 2
+    assert env.retry_waits == [1.0]
+
+
+async def test_attributes_of_an_unknown_map(env: Env, osu: OsuClient) -> None:
+    env.router.post(f"{API_URL}/beatmaps/1/attributes").mock(return_value=httpx.Response(404))
+
+    with pytest.raises(OsuNotFoundError):
+        await osu.get_beatmap_attributes(1, [])
+
+
+async def test_attributes_refresh_a_rejected_token(env: Env, osu: OsuClient) -> None:
+    env.token_route.mock(side_effect=[token_reply("old-token"), token_reply("new-token")])
+    route = env.router.post(ATTRIBUTES_URL).mock(
+        side_effect=[httpx.Response(401), httpx.Response(200, json=load("attributes_22423.json"))]
+    )
+
+    await osu.get_beatmap_attributes(22423, [])
+
+    assert [c.request.headers["Authorization"] for c in route.calls] == [
+        "Bearer old-token",
+        "Bearer new-token",
+    ]

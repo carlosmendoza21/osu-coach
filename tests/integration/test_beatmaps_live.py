@@ -35,7 +35,7 @@ from osu_coach.osu.files import BeatmapFiles
 from osu_coach.osu.ratelimiter import RateLimiter
 from osu_coach.osufile import parse_osu
 from osu_coach.patterns import object_features
-from tests.support import FIXTURES
+from tests.support import ALL_TABLES, FIXTURES
 from tests.unit.test_beatmaps import FakeFiles, FakeOsu, beatmap
 
 pytestmark = pytest.mark.integration
@@ -52,7 +52,7 @@ async def db(test_url: URL) -> AsyncIterator[AsyncEngine]:
 def empty_tables(engine: Engine) -> Iterator[None]:
     yield
     with engine.begin() as conn:
-        conn.execute(text("TRUNCATE players, scores, beatmaps, hit_objects, replays, hit_results"))
+        conn.execute(text(f"TRUNCATE {ALL_TABLES}"))
 
 
 async def fetch(db: AsyncEngine, osu: Any = None, files: Any = None) -> FetchResult:

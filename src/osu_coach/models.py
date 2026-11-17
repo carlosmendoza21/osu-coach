@@ -203,3 +203,25 @@ class ReplayHit(Base):
     error_ms: Mapped[int | None] = mapped_column(Integer)  # negative is early
     aim_error_px: Mapped[float | None] = mapped_column(Float)  # cursor to circle center
     forced: Mapped[bool]  # missed because a later circle was hit first (note lock)
+
+
+class BeatmapAttributes(Base):
+    """A map's difficulty with a set of mods, from osu! (see osu_coach.attributes)."""
+
+    __tablename__ = "beatmap_attributes"
+
+    # CASCADE: the attributes belong to the map.
+    beatmap_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("beatmaps.id", ondelete="CASCADE"), primary_key=True
+    )
+    # The mods that can change difficulty, sorted and joined: "" for none, "DT,HD".
+    mods: Mapped[str] = mapped_column(String(64), primary_key=True)
+    star_rating: Mapped[float] = mapped_column(Float)
+    max_combo: Mapped[int] = mapped_column(Integer)
+    aim_difficulty: Mapped[float] = mapped_column(Float)
+    speed_difficulty: Mapped[float] = mapped_column(Float)
+    speed_note_count: Mapped[float] = mapped_column(Float)
+    slider_factor: Mapped[float] = mapped_column(Float)
+    aim_difficult_strain_count: Mapped[float] = mapped_column(Float)
+    speed_difficult_strain_count: Mapped[float] = mapped_column(Float)
+    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

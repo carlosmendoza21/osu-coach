@@ -12,6 +12,7 @@ from sqlalchemy.pool import NullPool
 
 from osu_coach.analysis import MapNotStoredError, ReplayNotFoundError
 from osu_coach.analysis import analyze_replay as analyze_one_replay
+from osu_coach.attributes import fetch_player_attributes
 from osu_coach.beatmaps import UnsupportedModeError, maps_to_fetch
 from osu_coach.beatmaps import fetch_beatmap as fetch_one_beatmap
 from osu_coach.config import get_settings
@@ -57,6 +58,9 @@ async def _osu_sync(user: int | str) -> dict[str, Any]:
         # them all under osu!'s limit. Maps already stored aren't fetched again.
         for beatmap_id in missing:
             fetch_beatmap.delay(beatmap_id)
+        # The plays' difficulty (aim, speed...) for the skill profile: one task for the
+        # player, which only asks osu! for the pairs not stored yet.
+        fetch_attributes.delay(result.osu_id)
         # Celery sends results through Redis as JSON: a dict works, a dataclass doesn't.
         return {**asdict(result), "maps_queued": len(missing)}
     finally:
@@ -143,6 +147,30 @@ async def _analyze_replay(replay_id: int) -> dict[str, Any]:
             # Only needed if the map's file is missing: normally it's on disk already.
             files = BeatmapFiles(http, RateLimiter(redis), settings.data_dir / "beatmaps")
             return await analyze_one_replay(session, files, settings.data_dir, replay_id)
+    finally:
+        await redis.aclose()
+        await engine.dispose()
+
+
+@celery_app.task(name="fetch_attributes")
+def fetch_attributes(osu_id: int) -> dict[str, Any]:
+    """Fetch osu!'s difficulty attributes for a player's plays that don't have them yet."""
+    return asyncio.run(_fetch_attributes(osu_id), loop_factory=asyncio.SelectorEventLoop)
+
+
+async def _fetch_attributes(osu_id: int) -> dict[str, Any]:
+    engine = create_async_engine(settings.database_url, poolclass=NullPool)
+    redis: Redis = Redis.from_url(settings.redis_url)
+
+    try:
+        async with (
+            httpx.AsyncClient(timeout=20) as http,
+            async_sessionmaker(engine)() as session,
+        ):
+            tokens = TokenProvider(http, redis, settings.osu_client_id, settings.osu_client_secret)
+            osu = OsuClient(http, tokens, RateLimiter(redis))
+            result = await fetch_player_attributes(osu, session, osu_id)
+        return {"osu_id": osu_id, **asdict(result)}
     finally:
         await redis.aclose()
         await engine.dispose()
