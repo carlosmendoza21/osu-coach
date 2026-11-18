@@ -14,7 +14,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from osu_coach.models import Beatmap, BeatmapAttributes, Score
-from osu_coach.osu.client import OsuClient, OsuNotFoundError
+from osu_coach.osu.client import IncompleteAttributesError, OsuClient, OsuNotFoundError
 from osu_coach.osu.schemas import DifficultyAttributes
 
 log = logging.getLogger(__name__)
@@ -82,6 +82,9 @@ async def store_attributes(
 class AttributesResult:
     fetched: int
     not_found: int  # maps osu! no longer has
+    # Maps osu! has only a star rating for (unranked): asked again on the next run, in
+    # case they've been ranked since.
+    incomplete: int = 0
 
 
 async def fetch_player_attributes(
@@ -90,9 +93,10 @@ async def fetch_player_attributes(
     """Fetch and store the attributes a player's plays still need.
 
     Committed after each pair: if osu! fails part-way, what was fetched is kept, and the
-    next run only asks for the rest. A map osu! doesn't know any more is skipped.
+    next run only asks for the rest. A map osu! doesn't know any more, or has only a star
+    rating for (an unranked map), is skipped and counted.
     """
-    fetched = not_found = 0
+    fetched = not_found = incomplete = 0
     for beatmap_id, key in await attributes_to_fetch(session, osu_id):
         mods = key.split(",") if key else []
         try:
@@ -101,7 +105,11 @@ async def fetch_player_attributes(
             log.info("map %s is gone from osu!: no attributes for it", beatmap_id)
             not_found += 1
             continue
+        except IncompleteAttributesError:
+            log.info("map %s has only a star rating on osu! (unranked)", beatmap_id)
+            incomplete += 1
+            continue
         await store_attributes(session, beatmap_id, key, attrs)
         await session.commit()
         fetched += 1
-    return AttributesResult(fetched, not_found)
+    return AttributesResult(fetched, not_found, incomplete)

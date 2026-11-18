@@ -153,7 +153,7 @@ def test_fetch_attributes_through_the_worker() -> None:
 
     again = fetch_attributes.delay(2).get(timeout=TIMEOUT_S)
 
-    assert again == {"osu_id": 2, "fetched": 0, "not_found": 0}
+    assert again == {"osu_id": 2, "fetched": 0, "not_found": 0, "incomplete": 0}
     engine = create_engine(get_settings().database_url)
     with engine.connect() as conn:
         sql = (

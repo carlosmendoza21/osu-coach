@@ -22,7 +22,12 @@ from osu_coach.attributes import (
     fetch_player_attributes,
     store_attributes,
 )
-from osu_coach.osu.client import OsuApiError, OsuClient, OsuNotFoundError
+from osu_coach.osu.client import (
+    IncompleteAttributesError,
+    OsuApiError,
+    OsuClient,
+    OsuNotFoundError,
+)
 from osu_coach.osu.schemas import AttributesResponse, DifficultyAttributes
 from tests.support import ALL_TABLES, load
 
@@ -178,6 +183,18 @@ async def test_a_map_osu_no_longer_has_is_skipped(db: AsyncEngine, engine: Engin
 
     assert result == AttributesResult(fetched=3, not_found=1)
     assert [r[:2] for r in stored(engine)] == [(1, ""), (1, "DT"), (1, "HD")]
+
+
+async def test_an_unranked_map_is_skipped_and_asked_again(db: AsyncEngine, engine: Engine) -> None:
+    # osu! has only a star rating for map 2 (it isn't ranked): skipped and counted, not
+    # stored, so the next run asks again in case it has been ranked since.
+    result = await fetch(db, FakeOsu({2: IncompleteAttributesError("only a star rating")}))
+
+    assert result == AttributesResult(fetched=3, not_found=0, incomplete=1)
+    assert [r[:2] for r in stored(engine)] == [(1, ""), (1, "DT"), (1, "HD")]
+    osu = FakeOsu()
+    assert await fetch(db, osu) == AttributesResult(fetched=1, not_found=0, incomplete=0)
+    assert osu.calls == [(2, [])]
 
 
 async def test_a_failure_part_way_keeps_what_was_fetched(db: AsyncEngine, engine: Engine) -> None:

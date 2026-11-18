@@ -22,6 +22,7 @@ from osu_coach.osu.auth import CACHE_KEY, TOKEN_URL, TokenProvider
 from osu_coach.osu.client import (
     API_URL,
     MAX_SCORES,
+    IncompleteAttributesError,
     OsuApiError,
     OsuClient,
     OsuNotFoundError,
@@ -547,3 +548,28 @@ async def test_attributes_refresh_a_rejected_token(env: Env, osu: OsuClient) -> 
         "Bearer old-token",
         "Bearer new-token",
     ]
+
+
+async def test_attributes_of_an_unranked_map(env: Env, osu: OsuClient) -> None:
+    # What osu! sends for a pending map: only a star rating, and a max combo of 0.
+    reply = {"attributes": {"star_rating": 10.1089, "max_combo": 0}}
+    env.router.post(ATTRIBUTES_URL).mock(return_value=httpx.Response(200, json=reply))
+
+    with pytest.raises(IncompleteAttributesError, match="only a star rating for map 22423"):
+        await osu.get_beatmap_attributes(22423, [])
+
+
+async def test_an_unranked_maps_error_is_an_api_error(env: Env, osu: OsuClient) -> None:
+    # A caller catching OsuApiError for "osu! didn't give us this" catches it too.
+    assert issubclass(IncompleteAttributesError, OsuApiError)
+    assert not issubclass(IncompleteAttributesError, OsuNotFoundError)
+
+
+async def test_other_broken_attributes_are_not_hidden(env: Env, osu: OsuClient) -> None:
+    # Aim is there but another field is broken: a real surprise, raised as it is.
+    broken = load("attributes_22423.json")
+    broken["attributes"]["speed_difficulty"] = "fast"
+    env.router.post(ATTRIBUTES_URL).mock(return_value=httpx.Response(200, json=broken))
+
+    with pytest.raises(ValidationError):
+        await osu.get_beatmap_attributes(22423, [])

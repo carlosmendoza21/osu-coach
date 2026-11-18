@@ -8,7 +8,7 @@ from typing import Any
 from urllib.parse import quote
 
 import httpx
-from pydantic import TypeAdapter
+from pydantic import TypeAdapter, ValidationError
 
 from osu_coach.osu.auth import TokenProvider
 from osu_coach.osu.ratelimiter import RateLimiter
@@ -29,6 +29,14 @@ _SCORES = TypeAdapter(list[OsuScore])
 
 class OsuApiError(Exception):
     """osu! returned an error that retrying didn't fix."""
+
+
+class IncompleteAttributesError(OsuApiError):
+    """osu! has only a star rating for this map, not its full difficulty attributes.
+
+    osu! keeps full attributes for ranked, loved and qualified maps; for a pending or
+    graveyarded map it answers with just the star rating and a max combo of 0.
+    """
 
 
 class OsuNotFoundError(OsuApiError):
@@ -139,7 +147,16 @@ class OsuClient:
         """
         body = {"mods": mods, "ruleset": "osu"}
         response = await self._request("POST", f"/beatmaps/{beatmap_id}/attributes", json=body)
-        return AttributesResponse.model_validate_json(response.content).attributes
+        try:
+            return AttributesResponse.model_validate_json(response.content).attributes
+        except ValidationError:
+            # Only a star rating (an unranked map): say so plainly. Anything else wrong
+            # with the answer is a real surprise, and is raised as it is.
+            if "aim_difficulty" not in response.json().get("attributes", {}):
+                raise IncompleteAttributesError(
+                    f"osu! has only a star rating for map {beatmap_id} (not ranked?)"
+                ) from None
+            raise
 
     async def lookup_beatmap(self, checksum: str) -> OsuBeatmap:
         """A beatmap by the MD5 checksum of its .osu file (what a replay records)."""

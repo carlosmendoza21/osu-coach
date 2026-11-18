@@ -98,7 +98,7 @@ every push.
 On Windows, async database code needs a selector event loop (psycopg can't use the
 default one); `tests/conftest.py` sets it for the tests, and the worker task sets it too.
 
-**Unit tests** ([`tests/unit/`](tests/unit), 921 tests): call the code directly with nothing
+**Unit tests** ([`tests/unit/`](tests/unit), 992 tests): call the code directly with nothing
 running. `respx` fakes the osu! token endpoint (and blocks any unmocked request),
 `fakeredis` stands in for Redis, and the rate limiter gets a fake clock, so a 60 s window
 runs instantly.
@@ -158,7 +158,7 @@ and a full beatmap):
   mapset is not typed as a difficulty; a score's partial beatmap isn't accepted as a full
   one
 
-*API client* (56), with osu! faked by `respx`, fakeredis, a fake clock for the rate limiter,
+*API client* (59), with osu! faked by `respx`, fakeredis, a fake clock for the rate limiter,
 and recorded retry waits:
 - Requests: users by id (`key=id`) or username (`key=username`, escaped: spaces,
   brackets, `/`, and all-digit names), best and recent scores with the right `mode`,
@@ -171,7 +171,9 @@ and recorded retry waits:
 - `404` raises `OsuNotFoundError`; other errors raise `OsuApiError` (its parent); errors
   never contain the token or secret
 - A map's difficulty attributes: a POST with the mods and `"ruleset": "osu"` as JSON,
-  through the same rate limit, retries and token refresh as the GETs; `404` is not found
+  through the same rate limit, retries and token refresh as the GETs; `404` is not found;
+  an answer with only a star rating (osu!'s answer for an unranked map) is an
+  `IncompleteAttributesError`, while any other broken answer is raised as it is
 - Beatmaps by id, and by the MD5 checksum a replay records: sent as `?checksum=` (not in
   the path), lowercased first; 8 kinds of bad checksum (wrong length, not hex, spaces, a
   trailing newline, dashes) are refused before any request, token fetch or rate-limit
@@ -317,6 +319,21 @@ no longer reports AR or OD with mods, so there's nothing live to check):
 - Storing: one upsert keyed by map and mods, replacing the values but not the fetch time,
   and every attribute has its column
 
+*Skill scoring* (68), on plays built by hand:
+- Each play's value per skill: aim (the map's aim difficulty, 3% off per miss), speed (the
+  same, times accuracy squared), accuracy (+0.5% per OD over 8, less under), consistency
+  (the share of the map's combo held, 5% off per miss, never over 1), stamina (hard-to-tap
+  notes, none from a play with more than 3 misses), reading (the AR seen, +0.5 for HD, +1
+  for FL)
+- The pp-style weighting: best first whatever the order given, weights 1, 0.95, 0.95^2...
+  (two values 10 and 0 give 10 / 1.95), the best plays counting most and one fluke unable
+  to set the score
+- The scales: straight lines between points, flat outside; each runs 0 to 100 upwards,
+  and the reference points (a 5-star map's aim is 60, AR 10.5 is 85) are as documented
+- The profile: every skill scored to one decimal from its weighted values, all zeros
+  without plays, the strongest and weakest, and a better play always scoring higher in
+  its skill
+
 *Chart data* (46, `GET /replays/{id}/charts`), on hand-made frames and a fake session:
 - The cursor grid: 8 x 8 px cells by default, each frame in its cell (the corners, the
   middle, a cell's edges), the playfield's right and bottom edges outside it, frames off
@@ -390,7 +407,7 @@ statements are compiled to Postgres SQL:
   in one query for both lists, and none at all for a player with no scores; a map that
   isn't stored is `null` rather than dropping the score
 
-**Integration tests** ([`tests/integration/`](tests/integration), 190 tests): use real
+**Integration tests** ([`tests/integration/`](tests/integration), 196 tests): use real
 Redis, real time, real processes, and the real osu! API with the credentials in `.env`.
 They skip with the reason if Redis isn't running (`docker compose up -d redis`) or the
 credentials are missing, and clean up their Redis keys even if a check fails.
@@ -549,8 +566,16 @@ both DT and NC; map 2 nomod for a PF play), not the taiko map or another player'
 stored pairs drop off, also when stored for another player (they belong to the map).
 Fetching stores every pair with its normalized mods and then asks for nothing; a map
 osu! no longer has is skipped and counted; a failure part-way keeps what was fetched,
-and the next run asks only for the rest. Storing again replaces the values; deleting a
-map deletes its attributes; attributes need their map; the database sets the time.
+and the next run asks only for the rest. A map osu! has only a star rating for (an
+unranked map) is skipped and counted, not stored, and asked for again on the next run.
+Storing again replaces the values; deleting a map deletes its attributes; attributes need
+their map; the database sets the time.
+
+*A player's plays for scoring* (5, Postgres; also run in CI): a player's passed osu!
+standard plays with their map's attributes, matched by mod key (an NC play gets the DT
+attributes and the AR and OD seen at 1.5x: 10.33 and 9.78); a play without attributes yet
+and a Relax play are skipped and counted; failed plays, taiko plays and other players'
+aren't counted at all; a player without plays has none; a profile from them is in range.
 
 *Worker* (10, the full stack running): `fetch_beatmap` stores map 22423's 254 objects and
 refuses a taiko map. `fetch_replay_map` finds map 22423 by its checksum (and doesn't fetch
@@ -779,6 +804,12 @@ Both suites were checked against deliberately broken code:
   maps not skipped, one commit at the end, storing again keeping the old values, the mods
   not sent, no `ruleset`, a GET instead of a POST, the JSON body not sent, and the
   migration without CASCADE
+- Skill scoring and the unranked-map handling (20 breaks): no miss penalty, speed ignoring
+  accuracy, accuracy ignoring OD, consistency over 1 or ignoring misses, stamina from any
+  play, no HD bonus, values not sorted, a plain average, no floor below a scale, scores
+  not rounded, the weakest skill being the strongest, failed or taiko plays loaded, raw
+  mods as the key, Relax counted, the AR without mods, every bad answer called unranked,
+  unranked answers not recognized, and unranked maps stopping the fetch
 
 `.gitattributes` marks `.osu` files as binary: git's `\r\n` to `\n` conversion would change
 a map file's MD5 and break the fixtures on other machines.
@@ -814,6 +845,7 @@ src/osu_coach/
   analysis.py  analyze a stored replay: judge it, store UR, timing bias, aim, hit by hit
   charts.py    the data behind a replay's charts: each note's timing, aim, place; cursor grid
   attributes.py  osu!'s aim/speed difficulty for each played map and mods (fetch_attributes)
+  skills.py    a player's six skills, 0-100, from their top plays (hand-set scales, for now)
   replays.py   store an upload (original, Parquet frames, row); fetch the replay's map
   sync.py      save a player and their scores from osu! (upserts, one transaction)
   config.py    settings from env / .env
