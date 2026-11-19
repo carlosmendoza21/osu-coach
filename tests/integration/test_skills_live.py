@@ -1,4 +1,5 @@
-"""Integration tests for osu_coach.skills.load_plays against a real Postgres.
+"""Integration tests for osu_coach.skills against a real Postgres: loading a player's
+plays, and storing their profile.
 
 Run with:  uv run pytest -m integration
 Needs:     Postgres (docker compose up -d postgres). Skips with the reason if it's missing.
@@ -11,10 +12,19 @@ from collections.abc import AsyncIterator, Iterator
 import pytest
 from sqlalchemy import Engine, text
 from sqlalchemy.engine import URL
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
-from osu_coach.skills import SKILLS, Play, load_plays, skill_profile
+from osu_coach.skills import (
+    SKILLS,
+    Play,
+    SkillProfile,
+    load_plays,
+    skill_profile,
+    store_profile,
+    update_profile,
+)
 from tests.support import ALL_TABLES
 
 pytestmark = pytest.mark.integration
@@ -135,3 +145,134 @@ async def test_a_profile_from_the_database(db: AsyncEngine) -> None:
     assert (profile.plays_used, profile.plays_skipped) == (2, 2)
     assert set(profile.scores) == set(SKILLS)
     assert all(0 < s <= 100 for s in profile.scores.values())
+
+
+# ---------- Storing a profile ----------
+
+
+def a_profile(aim: float = 50.0, used: int = 10) -> SkillProfile:
+    scores = {"aim": aim, "speed": 40.0, "accuracy": 70.0, "consistency": 60.0,
+              "stamina": 30.0, "reading": 20.0}  # fmt: skip
+    return SkillProfile(scores, plays_used=used, plays_skipped=1)
+
+
+def stored(engine: Engine) -> list[dict[str, object]]:
+    with engine.connect() as conn:
+        rows = conn.execute(text("SELECT * FROM skill_profiles ORDER BY player_id"))
+        return [dict(r._mapping) for r in rows]
+
+
+async def store(db: AsyncEngine, osu_id: int, profile: SkillProfile) -> None:
+    async with async_sessionmaker(db)() as session:
+        await store_profile(session, osu_id, profile)
+        await session.commit()
+
+
+async def test_a_profile_is_stored(db: AsyncEngine, engine: Engine) -> None:
+    await store(db, 2, a_profile())
+
+    [row] = stored(engine)
+    computed_at = row.pop("computed_at")
+    assert row == {
+        "player_id": 2, "aim": 50.0, "speed": 40.0, "accuracy": 70.0, "consistency": 60.0,
+        "stamina": 30.0, "reading": 20.0, "strongest": "accuracy", "weakest": "reading",
+        "plays_used": 10, "plays_skipped": 1,
+    }  # fmt: skip
+    assert computed_at is not None  # set by the database
+
+
+async def test_storing_again_replaces_it(db: AsyncEngine, engine: Engine) -> None:
+    await store(db, 2, a_profile())
+    [first] = stored(engine)
+
+    await store(db, 2, a_profile(aim=90.0, used=12))
+
+    [second] = stored(engine)  # still one row
+    assert (second["aim"], second["strongest"], second["plays_used"]) == (90.0, "aim", 12)
+    # A new time: when the profile was scored, not first stored.
+    assert second["computed_at"] > first["computed_at"]  # type: ignore[operator]
+
+
+async def test_players_have_their_own_profiles(db: AsyncEngine, engine: Engine) -> None:
+    await store(db, 2, a_profile(aim=10.0))
+    await store(db, 3, a_profile(aim=90.0))
+
+    assert [(r["player_id"], r["aim"]) for r in stored(engine)] == [(2, 10.0), (3, 90.0)]
+
+
+async def test_a_profile_needs_its_player(db: AsyncEngine) -> None:
+    with pytest.raises(IntegrityError):
+        await store(db, 999, a_profile())
+
+
+async def test_deleting_a_player_deletes_their_profile(db: AsyncEngine, engine: Engine) -> None:
+    await store(db, 2, a_profile())
+    await store(db, 3, a_profile())
+
+    with engine.begin() as conn:
+        conn.execute(text("DELETE FROM scores WHERE player_id = 2"))
+        conn.execute(text("DELETE FROM players WHERE osu_id = 2"))
+
+    assert [r["player_id"] for r in stored(engine)] == [3]
+
+
+# ---------- Scoring and storing a player ----------
+
+
+async def update(db: AsyncEngine, osu_id: int) -> SkillProfile | None:
+    async with async_sessionmaker(db)() as session:
+        return await update_profile(session, osu_id)
+
+
+async def test_a_player_is_scored_from_their_plays(db: AsyncEngine, engine: Engine) -> None:
+    profile = await update(db, 2)
+
+    # The same as scoring the plays loaded, and stored (committed: read on another connection).
+    assert profile is not None
+    assert profile == skill_profile(*await load(db))
+    [row] = stored(engine)
+    assert {s: row[s] for s in SKILLS} == profile.scores
+    assert (row["plays_used"], row["plays_skipped"]) == (2, 2)
+    assert (row["strongest"], row["weakest"]) == (profile.strongest, profile.weakest)
+
+
+async def test_scoring_again_follows_new_plays(db: AsyncEngine, engine: Engine) -> None:
+    await update(db, 2)
+    with engine.begin() as conn:  # the HD play's attributes arrive
+        conn.execute(
+            text(
+                "INSERT INTO beatmap_attributes (beatmap_id, mods, star_rating, max_combo, "
+                "aim_difficulty, speed_difficulty, speed_note_count, slider_factor, "
+                "aim_difficult_strain_count, speed_difficult_strain_count) "
+                "VALUES (1, 'HD', 5, 400, 2.1, 1.5, 100, 1, 10, 10)"
+            )
+        )
+
+    profile = await update(db, 2)
+
+    assert profile is not None
+    [row] = stored(engine)
+    # The HD play now counts: 3 used, only the Relax play skipped.
+    assert (profile.plays_used, profile.plays_skipped) == (3, 1)
+    assert (row["plays_used"], row["plays_skipped"]) == (3, 1)
+
+
+async def test_a_player_without_plays_gets_zeros(db: AsyncEngine, engine: Engine) -> None:
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                "INSERT INTO players (osu_id, username, country, pp, playcount, accuracy) "
+                "VALUES (4, 'new', 'XX', 0, 0, 0)"
+            )
+        )
+
+    profile = await update(db, 4)
+
+    assert profile is not None
+    assert set(profile.scores.values()) == {0.0}
+    assert stored(engine)[0]["plays_used"] == 0
+
+
+async def test_an_unknown_player_is_not_scored(db: AsyncEngine, engine: Engine) -> None:
+    assert await update(db, 999) is None
+    assert stored(engine) == []

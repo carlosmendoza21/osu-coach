@@ -15,13 +15,16 @@ data.ppy.sh dumps).
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from itertools import pairwise
+from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
+from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from osu_coach.attributes import mods_key
 from osu_coach.difficulty import UnsupportedModsError, play_conditions
-from osu_coach.models import Beatmap, BeatmapAttributes, Score
+from osu_coach.models import Beatmap, BeatmapAttributes, Player, Score
+from osu_coach.models import SkillProfile as SkillProfileRow
 from osu_coach.osufile import Difficulty
 
 SKILLS = ("aim", "speed", "accuracy", "consistency", "stamina", "reading")
@@ -209,3 +212,35 @@ async def load_plays(session: AsyncSession, osu_id: int) -> tuple[list[Play], in
             )
         )
     return plays, skipped
+
+
+# ---------- A player's stored profile ----------
+
+
+async def store_profile(session: AsyncSession, osu_id: int, profile: SkillProfile) -> None:
+    """Store (or replace) a player's profile. Doesn't commit."""
+    values = {
+        "player_id": osu_id,
+        **profile.scores,
+        "strongest": profile.strongest,
+        "weakest": profile.weakest,
+        "plays_used": profile.plays_used,
+        "plays_skipped": profile.plays_skipped,
+    }
+    stmt = insert(SkillProfileRow).values(**values)
+    # computed_at by hand: onupdate doesn't run for an upsert's update.
+    update: dict[str, Any] = {k: stmt.excluded[k] for k in values if k != "player_id"}
+    update["computed_at"] = func.now()
+    await session.execute(stmt.on_conflict_do_update(index_elements=["player_id"], set_=update))
+
+
+async def update_profile(session: AsyncSession, osu_id: int) -> SkillProfile | None:
+    """Score a player from their stored plays and store the profile. Commits. None for a
+    player we don't have (the profile needs its player)."""
+    if await session.get(Player, osu_id) is None:
+        return None
+    plays, skipped = await load_plays(session, osu_id)
+    profile = skill_profile(plays, skipped)
+    await store_profile(session, osu_id, profile)
+    await session.commit()
+    return profile

@@ -153,7 +153,12 @@ def test_fetch_attributes_through_the_worker() -> None:
 
     again = fetch_attributes.delay(2).get(timeout=TIMEOUT_S)
 
+    profile = again.pop("profile")
     assert again == {"osu_id": 2, "fetched": 0, "not_found": 0, "incomplete": 0}
+    # The profile is scored again after the fetch, and stored.
+    assert set(profile) == {"aim", "speed", "accuracy", "consistency", "stamina", "reading",
+                            "plays_used"}  # fmt: skip
+    assert profile["plays_used"] > 0
     engine = create_engine(get_settings().database_url)
     with engine.connect() as conn:
         sql = (
@@ -164,3 +169,15 @@ def test_fetch_attributes_through_the_worker() -> None:
         plays_without_any = conn.execute(text(sql)).scalar()
     engine.dispose()
     assert plays_without_any == 0
+    with engine.connect() as conn:
+        row = conn.execute(text("SELECT aim, plays_used FROM skill_profiles WHERE player_id = 2"))
+        assert tuple(row.one()) == (profile["aim"], profile["plays_used"])
+    engine.dispose()
+
+
+def test_fetch_attributes_for_an_unknown_player() -> None:
+    result = fetch_attributes.delay(2**62).get(timeout=TIMEOUT_S)  # no player has this id
+
+    # Nothing to fetch, and no profile: it would have no player to belong to.
+    assert result == {"osu_id": 2**62, "fetched": 0, "not_found": 0, "incomplete": 0,
+                      "profile": None}  # fmt: skip

@@ -16,7 +16,10 @@ ROOT = Path(__file__).parent.parent
 FIXTURES = ROOT / "tests" / "fixtures" / "osu"
 # Every table, for the database tests' cleanup between tests (one TRUNCATE for all, so
 # foreign keys between them don't refuse it). Add a new table here.
-ALL_TABLES = "players, scores, beatmaps, hit_objects, replays, hit_results, beatmap_attributes"
+ALL_TABLES = (
+    "players, scores, beatmaps, hit_objects, replays, hit_results, beatmap_attributes, "
+    "skill_profiles"
+)
 
 
 def load(name: str) -> Any:

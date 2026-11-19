@@ -28,6 +28,10 @@ docker compose up --build
   with HR) and pattern, a 64 x 48 grid of where the cursor spent its time, and the play's
   300/100/50 windows (from the map's OD and the mods, in real time). `409` until the
   replay is analyzed
+- `GET /players/{osu_id}/skills`: a player's six skills (aim, speed, accuracy,
+  consistency, stamina, reading), each 0-100, with the strongest and weakest and how many
+  plays they were scored from. Scored again each time their maps' attributes are fetched
+  (after every sync); `409` until the first scoring, `404` for an unknown player
 - Postgres 16 + pgvector on `5432`, Redis on `6379`
 - The `migrate` service runs `alembic upgrade head` before the API and worker start.
 
@@ -98,7 +102,7 @@ every push.
 On Windows, async database code needs a selector event loop (psycopg can't use the
 default one); `tests/conftest.py` sets it for the tests, and the worker task sets it too.
 
-**Unit tests** ([`tests/unit/`](tests/unit), 992 tests): call the code directly with nothing
+**Unit tests** ([`tests/unit/`](tests/unit), 1005 tests): call the code directly with nothing
 running. `respx` fakes the osu! token endpoint (and blocks any unmocked request),
 `fakeredis` stands in for Redis, and the rate limiter gets a fake clock, so a 60 s window
 runs instantly.
@@ -407,7 +411,14 @@ statements are compiled to Postgres SQL:
   in one query for both lists, and none at all for a player with no scores; a map that
   isn't stored is `null` rather than dropping the score
 
-**Integration tests** ([`tests/integration/`](tests/integration), 196 tests): use real
+*`GET /players/{osu_id}/skills`* (13), with a fake session:
+- A scored player gets their profile, looked up once; a player we have but haven't
+  scored is `409` "isn't ready yet"; an unknown player, or one whose id only another
+  player's profile has, is `404`
+- The response has exactly the profile's fields, with the time in UTC; a username, a
+  decimal or no id at all isn't an osu! id (`422`, `404`); the endpoint is documented
+
+**Integration tests** ([`tests/integration/`](tests/integration), 208 tests): use real
 Redis, real time, real processes, and the real osu! API with the credentials in `.env`.
 They skip with the reason if Redis isn't running (`docker compose up -d redis`) or the
 credentials are missing, and clean up their Redis keys even if a check fails.
@@ -548,9 +559,10 @@ osu! and file store, map 22423) is fetched with its 254 objects, not fetched aga
 stored, found in either letter case only with its hit objects, and a newer version is
 stored but refused as the replay's map.
 
-*Whole app* (9, the full stack running): over real HTTP, `/health`; peppy's profile with 50
+*Whole app* (11, the full stack running): over real HTTP, `/health`; peppy's profile with 50
 best plays sorted by pp; a repeat request served without a new sync; `404` for an unknown
-player; the endpoint in the OpenAPI docs. Day 3's goal: uploading a replay on map 22423
+player; peppy's skills, scored after their sync, each 0-100 with the right strongest and
+weakest, and `404` for an unknown id's; both endpoints in the OpenAPI docs. Day 3's goal: uploading a replay on map 22423
 (whose objects are removed first) stores the replay and queues the map, the worker stores
 all 254 objects, and uploading again is `200` with the same replay and nothing queued; a
 bad file is `422`. Day 4's goal end to end: a replay playing map 22423 is uploaded with the
@@ -577,7 +589,15 @@ attributes and the AR and OD seen at 1.5x: 10.33 and 9.78); a play without attri
 and a Relax play are skipped and counted; failed plays, taiko plays and other players'
 aren't counted at all; a player without plays has none; a profile from them is in range.
 
-*Worker* (10, the full stack running): `fetch_beatmap` stores map 22423's 254 objects and
+*Storing a player's profile* (9, Postgres; also run in CI): a profile is stored with its
+six scores, strongest, weakest and play counts, and the database sets the time; storing
+again replaces it in place, with a later time; each player has their own; a profile needs
+its player, and deleting the player deletes it. Scoring a player stores (and commits) the
+profile from their loaded plays; once a skipped play's attributes arrive it counts on the
+next scoring; a player without plays is stored with zeros; an unknown player isn't scored
+and nothing is stored.
+
+*Worker* (11, the full stack running): `fetch_beatmap` stores map 22423's 254 objects and
 refuses a taiko map. `fetch_replay_map` finds map 22423 by its checksum (and doesn't fetch
 it again, in either letter case), and fails with `OsuNotFoundError` for an unknown file.
 `analyze_replay` fails with `ReplayNotFoundError` for a replay that doesn't exist. A sync queues `fetch_beatmap` for the player's maps without objects
@@ -585,7 +605,9 @@ it again, in either letter case), and fails with `OsuNotFoundError` for an unkno
 `osu_sync` through the real Celery worker returns
 peppy's summary, repeated syncs don't duplicate rows, and an unknown player fails the task
 with `OsuNotFoundError`. `fetch_attributes` leaves none of peppy's plays without
-attributes, and a second run fetches none. It writes to the dev database, like the app.
+attributes, and a second run fetches none, and peppy's profile is scored again and
+stored as the task reports it; for an unknown player nothing is fetched and no profile is
+made. It writes to the dev database, like the app.
 
 **Frontend tests** ([`frontend/`](frontend), Vitest; also run in CI):
 
@@ -810,6 +832,11 @@ Both suites were checked against deliberately broken code:
   not rounded, the weakest skill being the strongest, failed or taiko plays loaded, raw
   mods as the key, Relax counted, the AR without mods, every bad answer called unranked,
   unranked answers not recognized, and unranked maps stopping the fetch
+- Skill profiles and their endpoint (11 breaks): the strongest stored as the weakest, the
+  used count stored as skipped, storing again changing nothing, the time not moved on a
+  replace, an unknown player not caught, the profile not committed, the skipped count
+  dropped, not-ready as `404`, an unknown player as `409`, the player looked up before the
+  profile, and the migration without CASCADE
 
 `.gitattributes` marks `.osu` files as binary: git's `\r\n` to `\n` conversion would change
 a map file's MD5 and break the fixtures on other machines.
@@ -829,7 +856,7 @@ Each makes at least one test fail.
 ```
 src/osu_coach/
   main.py      FastAPI app
-  api/         routers: /health, /players/{username}, /replays/upload, /replays/{id}
+  api/         routers: /health, /players/{username}, /players/{osu_id}/skills, /replays/...
   osu/auth.py  osu! API token (client credentials), cached in Redis
   osu/ratelimiter.py  shared rate limit for osu! requests (sliding window in Redis)
   osu/retry.py        retries for temporary failures (backoff, jitter, Retry-After)
@@ -845,7 +872,8 @@ src/osu_coach/
   analysis.py  analyze a stored replay: judge it, store UR, timing bias, aim, hit by hit
   charts.py    the data behind a replay's charts: each note's timing, aim, place; cursor grid
   attributes.py  osu!'s aim/speed difficulty for each played map and mods (fetch_attributes)
-  skills.py    a player's six skills, 0-100, from their top plays (hand-set scales, for now)
+  skills.py    a player's six skills, 0-100, from their top plays (hand-set scales, for now),
+               stored as their skill profile
   replays.py   store an upload (original, Parquet frames, row); fetch the replay's map
   sync.py      save a player and their scores from osu! (upserts, one transaction)
   config.py    settings from env / .env

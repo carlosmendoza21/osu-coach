@@ -225,3 +225,27 @@ class BeatmapAttributes(Base):
     aim_difficult_strain_count: Mapped[float] = mapped_column(Float)
     speed_difficult_strain_count: Mapped[float] = mapped_column(Float)
     fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class SkillProfile(Base):
+    """A player's six skills, 0-100, as osu_coach.skills scored them from their plays."""
+
+    __tablename__ = "skill_profiles"
+
+    # CASCADE: the profile belongs to the player.
+    player_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("players.osu_id", ondelete="CASCADE"), primary_key=True
+    )
+    aim: Mapped[float] = mapped_column(Float)
+    speed: Mapped[float] = mapped_column(Float)
+    accuracy: Mapped[float] = mapped_column(Float)
+    consistency: Mapped[float] = mapped_column(Float)
+    stamina: Mapped[float] = mapped_column(Float)
+    reading: Mapped[float] = mapped_column(Float)
+    strongest: Mapped[str] = mapped_column(String(16))  # a skill's name
+    weakest: Mapped[str] = mapped_column(String(16))
+    plays_used: Mapped[int] = mapped_column(Integer)
+    plays_skipped: Mapped[int] = mapped_column(Integer)  # no attributes yet, or Relax...
+    computed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )

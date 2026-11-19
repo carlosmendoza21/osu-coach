@@ -71,10 +71,34 @@ def test_unknown_player_is_404(api: httpx.Client) -> None:
     assert "not found" in resp.json()["detail"]
 
 
+def test_a_players_skills(api: httpx.Client) -> None:
+    api.get("/players/peppy")  # synced, and their attributes fetched and scored after
+    deadline = time.monotonic() + TIMEOUT_S
+    while (resp := api.get("/players/2/skills")).status_code == 409:
+        assert time.monotonic() < deadline, "peppy's skill profile was never scored"
+        time.sleep(1)
+
+    assert resp.status_code == 200
+    body = resp.json()
+    skills = ("aim", "speed", "accuracy", "consistency", "stamina", "reading")
+    assert all(0 <= body[s] <= 100 for s in skills)
+    assert body["strongest"] == max(skills, key=lambda s: body[s])
+    assert body["weakest"] == min(skills, key=lambda s: body[s])
+    assert body["plays_used"] > 0
+
+
+def test_unknown_players_skills_are_404(api: httpx.Client) -> None:
+    resp = api.get(f"/players/{2**62}/skills")
+
+    assert resp.status_code == 404
+    assert "not found" in resp.json()["detail"]
+
+
 def test_endpoint_is_documented(api: httpx.Client) -> None:
     paths = api.get("/openapi.json").json()["paths"]
 
     assert "/players/{username}" in paths
+    assert "/players/{osu_id}/skills" in paths
 
 
 # ---------- Uploading a replay ----------

@@ -23,6 +23,7 @@ from osu_coach.osu.files import BeatmapFiles
 from osu_coach.osu.ratelimiter import RateLimiter
 from osu_coach.replays import MapChangedError
 from osu_coach.replays import fetch_replay_map as fetch_one_replay_map
+from osu_coach.skills import update_profile
 from osu_coach.sync import sync_player
 
 settings = get_settings()
@@ -170,7 +171,15 @@ async def _fetch_attributes(osu_id: int) -> dict[str, Any]:
             tokens = TokenProvider(http, redis, settings.osu_client_id, settings.osu_client_secret)
             osu = OsuClient(http, tokens, RateLimiter(redis))
             result = await fetch_player_attributes(osu, session, osu_id)
-        return {"osu_id": osu_id, **asdict(result)}
+            # The attributes are what the profile is scored from: score it again now.
+            profile = await update_profile(session, osu_id)
+        return {
+            "osu_id": osu_id,
+            **asdict(result),
+            "profile": None
+            if profile is None
+            else {**profile.scores, "plays_used": profile.plays_used},
+        }
     finally:
         await redis.aclose()
         await engine.dispose()
