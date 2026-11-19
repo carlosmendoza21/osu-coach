@@ -11,7 +11,7 @@ import { resolve } from 'node:path'
 import { type ViteDevServer, createServer } from 'vite'
 import { afterAll, beforeAll, describe, expect, test, vi } from 'vitest'
 
-import { ApiError, getHealth, getPlayer, getReplay, getReplayCharts, uploadReplay } from '../src/api'
+import { ApiError, getHealth, getPlayer, getReplay, getReplayCharts, getSkills, uploadReplay } from '../src/api'
 import type {
   Beatmap,
   ChartNote,
@@ -21,6 +21,7 @@ import type {
   ReplayDetail,
   Score,
   ScoreMap,
+  Skills,
   UploadResponse,
 } from '../src/types'
 
@@ -51,6 +52,9 @@ const NOTE = { idx: 1, time_ms: 1, result: 1, error_ms: 1, aim_error_px: 1, x: 1
   pattern: 1 } satisfies Record<keyof ChartNote, 1>
 const DETAIL = { replay: 1, beatmap: 1, status: 1, judged: 1, matches_official: 1,
   by_pattern: 1 } satisfies Record<keyof ReplayDetail, 1>
+const SKILLS = { player_id: 1, aim: 1, speed: 1, accuracy: 1, consistency: 1, stamina: 1,
+  reading: 1, strongest: 1, weakest: 1, plays_used: 1, plays_skipped: 1,
+  computed_at: 1 } satisfies Record<keyof Skills, 1>
 
 function fields(value: object): string[] {
   return Object.keys(value).sort()
@@ -123,6 +127,34 @@ describe.skipIf(!apiUp)('through the dev server, against the real API', () => {
       expect(fields(score.beatmap ?? {})).toEqual(expected(SCORE_MAP))
       expect(score.beatmap?.id).toBe(score.beatmap_id)
     }
+  })
+
+  test("a player's skills have exactly the fields src/types.ts declares", async () => {
+    // peppy is synced above; the first scoring follows the attributes fetch.
+    const { player } = await getPlayer('peppy')
+    let skills: Skills | undefined
+    for (let tries = 0; skills === undefined; tries++) {
+      try {
+        skills = await getSkills(player.osu_id)
+      } catch (e) {
+        if (!(e instanceof ApiError && e.status === 409) || tries >= 60) throw e
+        await new Promise((r) => setTimeout(r, 1000))
+      }
+    }
+
+    expect(fields(skills)).toEqual(expected(SKILLS))
+    expect(skills.player_id).toBe(player.osu_id)
+    const names = ['aim', 'speed', 'accuracy', 'consistency', 'stamina', 'reading'] as const
+    for (const name of names) expect(skills[name]).toBeGreaterThanOrEqual(0)
+    expect(names).toContain(skills.strongest)
+    expect(names).toContain(skills.weakest)
+  }, 90_000)
+
+  test("an unknown player's skills are the API's 404, with its reason", async () => {
+    const error = await getSkills(999_999_999).catch((e: unknown) => e)
+
+    expect((error as ApiError).status).toBe(404)
+    expect((error as ApiError).message).toBe('player 999999999 not found')
   })
 
   test.skipIf(realReplays.length === 0)(

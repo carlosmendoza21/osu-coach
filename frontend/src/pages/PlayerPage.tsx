@@ -3,6 +3,7 @@ import { useParams } from 'react-router'
 
 import { getPlayer } from '../api'
 import ScoreTable from '../components/ScoreTable'
+import SkillsPanel from '../components/SkillsPanel'
 import { playerError } from '../errors'
 import { formatCount, formatPercent, formatPp, formatRank, timeAgo } from '../format'
 import type { PlayerResponse } from '../types'
@@ -80,6 +81,7 @@ export default function PlayerPage() {
         </dl>
         <p className="muted">Synced from osu! {timeAgo(player.updated_at)}.</p>
       </section>
+      <SkillsPanel osuId={player.osu_id} />
       <ScoreTable scores={best} caption={`Top plays (${best.length})`} />
       <ScoreTable scores={recent} caption={`Recent plays (${recent.length})`} />
     </>

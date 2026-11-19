@@ -1,5 +1,5 @@
 // Sample API data for tests, shaped like the real responses (src/types.ts).
-import type { ChartNote, PlayerResponse, ReplayCharts, ReplayDetail, Score } from '../types'
+import type { ChartNote, PlayerResponse, ReplayCharts, ReplayDetail, Score, Skills } from '../types'
 
 export function score(changes: Partial<Score> = {}): Score {
   return {
@@ -146,6 +146,24 @@ export function chartsData(changes: Partial<ReplayCharts> = {}): ReplayCharts {
       note({ idx: 5, time_ms: 2000, error_ms: 1 }),
     ],
     cursor: { cols, rows, counts: [0, 1, 4, 0, 9, 16, 0, 0, 0, 0, 0, 1], off_playfield: 3 },
+    ...changes,
+  }
+}
+
+export function skills(changes: Partial<Skills> = {}): Skills {
+  return {
+    player_id: 2,
+    aim: 41.1,
+    speed: 32.9,
+    accuracy: 69.4,
+    consistency: 80.9,
+    stamina: 38.3,
+    reading: 8,
+    strongest: 'consistency',
+    weakest: 'reading',
+    plays_used: 50,
+    plays_skipped: 0,
+    computed_at: '2026-11-18T05:23:06Z',
     ...changes,
   }
 }

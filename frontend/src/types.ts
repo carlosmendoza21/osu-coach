@@ -129,3 +129,16 @@ export interface ReplayCharts {
   notes: ChartNote[]
   cursor: { cols: number; rows: number; counts: number[]; off_playfield: number }
 }
+
+// GET /players/{osu_id}/skills
+export type SkillName = 'aim' | 'speed' | 'accuracy' | 'consistency' | 'stamina' | 'reading'
+
+export interface Skills extends Record<SkillName, number> {
+  // each skill above is 0-100
+  player_id: number
+  strongest: SkillName
+  weakest: SkillName
+  plays_used: number // the plays it was scored from
+  plays_skipped: number // plays without attributes yet, or with Relax and the like
+  computed_at: string // ISO time
+}

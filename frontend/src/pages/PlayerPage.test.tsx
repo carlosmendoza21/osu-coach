@@ -6,7 +6,7 @@ import { MemoryRouter } from 'react-router'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 
 import App from '../App'
-import { playerResponse } from '../test/fixtures'
+import { playerResponse, skills } from '../test/fixtures'
 
 // Requests waiting for an answer, by URL; answer() settles them.
 let waiting: { url: string; reply: (r: Response) => void; fail: (e: unknown) => void }[]
@@ -81,6 +81,41 @@ test('the profile', async () => {
   expect(profile).toHaveTextContent('Synced from osu! 2 minutes ago.')
   const name = screen.getByRole('link', { name: 'peppy' })
   expect(name).toHaveAttribute('href', 'https://osu.ppy.sh/users/2')
+})
+
+test("the player's skills are asked for by their osu! id, once the profile is in", async () => {
+  at('/players/peppy')
+  expect(waiting.map((w) => w.url)).toEqual([PEPPY]) // not before: the id isn't known yet
+
+  await answer(PEPPY, Response.json(playerResponse({ osu_id: 7562902 })))
+
+  expect(waiting.map((w) => w.url)).toEqual(['/api/players/7562902/skills'])
+})
+
+test('the skills show under the profile, above the plays', async () => {
+  at('/players/peppy')
+  await answer(PEPPY, Response.json(playerResponse()))
+  await answer('/api/players/2/skills', Response.json(skills()))
+
+  const profile = screen.getByRole('region', { name: 'Profile' })
+  const panel = screen.getByRole('region', { name: 'Skills' })
+  const [top] = screen.getAllByRole('table')
+  const before = (a: Element, b: Element) => (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0
+  expect(before(profile, panel)).toBe(true)
+  expect(before(panel, top)).toBe(true)
+  expect(panel).toHaveTextContent('Strongest: Consistency')
+  expect(screen.getAllByRole('table')).toHaveLength(2)
+})
+
+test("the skills failing doesn't hide the profile or the plays", async () => {
+  at('/players/peppy')
+  await answer(PEPPY, Response.json(playerResponse()))
+  await answer('/api/players/2/skills', Response.json({ detail: 'boom' }, { status: 500 }))
+
+  expect(screen.getByRole('region', { name: 'Skills' })).toHaveTextContent("The skills couldn't be loaded.")
+  expect(screen.getByRole('region', { name: 'Profile' })).toHaveTextContent('peppy')
+  expect(screen.getAllByRole('table')).toHaveLength(2)
+  expect(screen.queryByRole('alert')).toBeNull() // the page itself didn't fail
 })
 
 test('an inactive player is unranked', async () => {

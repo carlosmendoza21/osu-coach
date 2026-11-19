@@ -2,7 +2,7 @@
 // answers with a chosen response; src/api.live.test.ts calls the real API instead.
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 
-import { API_BASE, ApiError, getHealth, getPlayer, getReplay, uploadReplay } from './api'
+import { API_BASE, ApiError, getHealth, getPlayer, getReplay, getSkills, uploadReplay } from './api'
 
 type Call = { url: string; init?: RequestInit }
 let calls: Call[]
@@ -35,6 +35,7 @@ describe('requests', () => {
     ['getPlayer with a slash', () => getPlayer('a/b'), '/api/players/a%2Fb'],
     ['getPlayer with a ?', () => getPlayer('who?'), '/api/players/who%3F'],
     ['getReplay', () => getReplay(42), '/api/replays/42'],
+    ['getSkills', () => getSkills(7562902), '/api/players/7562902/skills'],
   ])('%s asks for %s', async (_name, call, url) => {
     await call()
 

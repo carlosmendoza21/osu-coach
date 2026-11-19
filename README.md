@@ -611,7 +611,7 @@ made. It writes to the dev database, like the app.
 
 **Frontend tests** ([`frontend/`](frontend), Vitest; also run in CI):
 
-*Unit* (226, `npm test`), with `fetch` replaced:
+*Unit* (266, `npm test`), with `fetch` replaced:
 - `api.ts`: each call's URL, under the proxied `/api`, with player names escaped (a space,
   a slash or a `?` can't break the path); an upload posts the file as the `file` form
   field, without a hand-set Content-Type (the browser adds multipart's boundary); the JSON
@@ -636,6 +636,18 @@ made. It writes to the dev database, like the app.
   profile and both tables; 404, 502, 504, other errors and no answer each explained;
   searching another player drops the last one at once, and a late answer (or error) for
   the previous player never replaces the new one
+- Skills on the profile page (40, with fake timers for the waiting): asked for by the
+  player's osu! id only once the profile is in, shown between the profile and the plays,
+  and a skills error leaves the rest of the page as it is. The radar's order (aim on top,
+  speed beside stamina, accuracy beside consistency), every skill labelled once, and
+  "from 1 play" or "from 58 plays (3 not scored yet)". The panel: loading, the strongest
+  and weakest, the six scores to one decimal, the radar drawn; a profile not scored yet
+  (`409`) is asked for again every 5 s, not sooner, shown when it's in, and given up on
+  after 5 minutes with a message; leaving stops the asking; a `404`, a `500` or no answer
+  each explained and not asked again; another player's id is asked for, and neither the
+  last player's profile nor a late answer for them ever shows for the new one. The radar
+  itself, with Recharts given a fixed size: its six labels round from the top, and each
+  point as far out as its score on a fixed 0-100 scale (a best of 50 reaches halfway)
 - Analysis formatting: osu!'s accuracy formula (a 100 a third, a 50 a sixth; 0 objects
   give 0, not NaN; FREEDOM DiVE's counts give osu!'s 99.58%), "1.8 ms early / late / on
   time" (within 0.05 ms), UR and pixels; upload errors (413, 422 with the parser's
@@ -670,11 +682,13 @@ made. It writes to the dev database, like the app.
   charts, an error saying only the charts are missing, and a late answer for another
   replay never replacing them
 
-*Live* (5, `npm run test:live`; needs the API running, skips otherwise): a real Vite dev
+*Live* (7, `npm run test:live`; needs the API running, skips otherwise): a real Vite dev
 server is started with `vite.config.ts`, and `api.ts` calls the API through its proxy:
 `/health` answers; an unknown replay is the API's `404` with its reason; an upload reaches
 the parser (so the form field name is right); peppy's profile and plays have exactly the
-fields `types.ts` declares, no more and no fewer, and every play comes with its map; and a
+fields `types.ts` declares, no more and no fewer, and every play comes with its map;
+peppy's skills (checked until scored) have exactly the declared fields, and an unknown
+player's are the API's `404` with its reason; and a
 real replay from `data/replays/` uploads and is checked until analyzed, as the replay page
 does, with its detail's fields (every pattern's too) as declared and our counts matching
 osu!'s; its chart data has the declared fields and exactly the notes and misses its
@@ -807,6 +821,16 @@ Both suites were checked against deliberately broken code:
   osu! row showing our counts, misses not standing out, and no upload link. Two first got
   through, both gaps in the tests (the next replay always answered at once; the sample's
   two rows of counts were equal); a test for each was added
+- The skills panel (20 breaks): the wrong URL, stamina and accuracy swapped, a wrong
+  label, the radar's points out of order, always "plays", skipped plays not mentioned, a
+  `409` not asked again, every error asked again, never giving up, the asking not stopped
+  on leaving, late answers shown, the old player's profile shown, the `404` not explained,
+  whole-number scores, the strongest shown as the weakest, a scale fitted to the data, the
+  radar starting at the side, and the panel missing, below the plays or given the wrong
+  id. Four first got through, all gaps in the tests (the new player never answered first,
+  the old profile was never on screen when the id changed, the highest sample score
+  rounded up to 100 anyway, and the tables weren't in the order check); a test for each
+  was added
 - `charts.py` and its endpoint (13 breaks): song time instead of real time or the rate the
   wrong way, speed mods ignored, HR not flipped or flipped sideways, aim not rounded, the
   join ignoring the map, notes out of map order, the playfield's right edge counted in,
