@@ -11,6 +11,7 @@ from osu_coach.osu.files import BeatmapFiles
 from osu_coach.osufile import parse_osu
 from osu_coach.patterns import ObjectFeatures, object_features
 from osu_coach.sync import beatmap_values, upsert_beatmaps
+from osu_coach.vectors import pattern_vector, store_vector
 
 
 class UnsupportedModeError(ValueError):
@@ -73,7 +74,12 @@ async def fetch_beatmap(
     features = object_features(parsed)
     await upsert_beatmaps(session, [beatmap_values(beatmap, beatmap.beatmapset, beatmap.max_combo)])
     await store_hit_objects(session, beatmap.id, features)
-    await session.commit()  # all or nothing: the map and its objects together
+    await store_vector(
+        session,
+        beatmap.id,
+        pattern_vector(features, beatmap.cs, beatmap.bpm, beatmap.difficulty_rating),
+    )
+    await session.commit()  # all or nothing: the map, its objects and its vector together
 
     return FetchResult(beatmap_id=beatmap.id, version=beatmap.version, objects=len(features))
 

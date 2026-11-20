@@ -102,7 +102,7 @@ every push.
 On Windows, async database code needs a selector event loop (psycopg can't use the
 default one); `tests/conftest.py` sets it for the tests, and the worker task sets it too.
 
-**Unit tests** ([`tests/unit/`](tests/unit), 1005 tests): call the code directly with nothing
+**Unit tests** ([`tests/unit/`](tests/unit), 1040 tests): call the code directly with nothing
 running. `respx` fakes the osu! token endpoint (and blocks any unmocked request),
 `fakeredis` stands in for Redis, and the rate limiter gets a fake clock, so a 60 s window
 runs instantly.
@@ -338,6 +338,17 @@ no longer reports AR or OD with mods, so there's nothing live to check):
   without plays, the strongest and weakest, and a better play always scoring higher in
   its skill
 
+*Map pattern vectors* (34), on hand-made objects and map 22423's real file:
+- Eleven numbers, each 0-1, and the table's column holds exactly that many
+- Shares: none of nothing is 0, not a division error. Long streams: 16 notes in a row
+  count and 15 don't, a run to the last note counts, and a jump splits two bursts so
+  neither is long. Spacing bands in circle diameters, each starting at its edge (1.0 is
+  1-2), so the same 100 px gap is 2-3 diameters at CS 7 but 1-2 at CS 2
+- A hand-made map's whole vector; BPM / 300 and stars / 10, held between 0 and 1 even
+  for nonsense input; an empty map; values to 4 places; any field by name
+- Map 22423 (a 140 BPM Hard): no jumps, 18 stream notes of 254 in short bursts, 84
+  sliders, most gaps 1-2 diameters, and every gap in a band
+
 *Chart data* (46, `GET /replays/{id}/charts`), on hand-made frames and a fake session:
 - The cursor grid: 8 x 8 px cells by default, each frame in its cell (the corners, the
   middle, a cell's edges), the playfield's right and bottom edges outside it, frames off
@@ -354,9 +365,10 @@ no longer reports AR or OD with mods, so there's nothing live to check):
 Celery logs a missing player, a taiko map, a changed map, an unknown replay, a map not
 stored yet or unsupported mods in one line instead of a traceback.
 
-*Fetching a map* (16), with a fake client, file store and session:
+*Fetching a map* (17), with a fake client, file store and session:
 - One map is fetched, its file is asked for with osu!'s checksum, and the writes go map
-  row (with its max combo) -> old objects deleted -> new objects inserted -> one commit;
+  row (with its max combo) -> old objects deleted -> new objects inserted -> its pattern
+  vector stored (the same numbers the vector tests get for this map) -> one commit;
   every object is stored with its features
 - Other game modes, a file whose object counts don't match osu!'s, osu! errors, a bad
   download and a broken file are all refused before anything is written
@@ -418,7 +430,7 @@ statements are compiled to Postgres SQL:
 - The response has exactly the profile's fields, with the time in UTC; a username, a
   decimal or no id at all isn't an osu! id (`422`, `404`); the endpoint is documented
 
-**Integration tests** ([`tests/integration/`](tests/integration), 208 tests): use real
+**Integration tests** ([`tests/integration/`](tests/integration), 222 tests): use real
 Redis, real time, real processes, and the real osu! API with the credentials in `.env`.
 They skip with the reason if Redis isn't running (`docker compose up -d redis`) or the
 credentials are missing, and clean up their Redis keys even if a check fails.
@@ -597,8 +609,20 @@ profile from their loaded plays; once a skipped play's attributes arrive it coun
 next scoring; a player without plays is stored with zeros; an unknown player isn't scored
 and nothing is stored.
 
-*Worker* (11, the full stack running): `fetch_beatmap` stores map 22423's 254 objects and
-refuses a taiko map. `fetch_replay_map` finds map 22423 by its checksum (and doesn't fetch
+*Map pattern vectors* (13, Postgres with pgvector; also run in CI): a vector is stored with
+its version; storing again replaces it in place, with a later time; it needs its map,
+and deleting the map deletes it; pgvector refuses a vector one number short. Maps with
+objects and no current vector need one (not a map without objects, nor one already
+built); an outdated version is built again. A vector built from stored objects matches
+one built from the objects directly, with the map's CS, BPM and stars, even when the
+rows are stored shuffled (read out of order, two long streams would merge into one);
+building every missing vector commits each and then finds none. Ordering maps by
+pgvector distance to an all-streams target gives the stream map, then the jump map, then
+the slider map.
+
+*Worker* (12, the full stack running): `fetch_beatmap` stores map 22423's 254 objects and
+its pattern vector (the one worked out from the file in the unit tests), and refuses a
+taiko map; `build_map_vectors` builds a removed vector back the same and then finds none. `fetch_replay_map` finds map 22423 by its checksum (and doesn't fetch
 it again, in either letter case), and fails with `OsuNotFoundError` for an unknown file.
 `analyze_replay` fails with `ReplayNotFoundError` for a replay that doesn't exist. A sync queues `fetch_beatmap` for the player's maps without objects
 (a removed map is fetched back with all 254 objects), and a second sync queues none.
@@ -861,6 +885,15 @@ Both suites were checked against deliberately broken code:
   replace, an unknown player not caught, the profile not committed, the skipped count
   dropped, not-ready as `404`, an unknown player as `409`, the player looked up before the
   profile, and the migration without CASCADE
+- Map pattern vectors (21 breaks): no guard for an empty map, 16 notes not a long
+  stream, the last run not counted, spacing in pixels, band edges going down, BPM not
+  capped, stars below 0, values not rounded, streams counted as jumps, the radius as the
+  diameter, storing again changing nothing, the time not moved on a replace, the version
+  not stored, outdated vectors kept, maps without objects built, objects read out of
+  order, building not committed, `fetch_beatmap` storing no vector or swapping BPM and
+  stars, and the migration without CASCADE or without the extension. The BPM-and-stars
+  swap first got through (only the worker test, run against the live stack, saw the
+  values); a unit test now checks the vector `fetch_beatmap` stores
 
 `.gitattributes` marks `.osu` files as binary: git's `\r\n` to `\n` conversion would change
 a map file's MD5 and break the fixtures on other machines.
@@ -898,6 +931,7 @@ src/osu_coach/
   attributes.py  osu!'s aim/speed difficulty for each played map and mods (fetch_attributes)
   skills.py    a player's six skills, 0-100, from their top plays (hand-set scales, for now),
                stored as their skill profile
+  vectors.py   each map's pattern vector (jumps, streams, spacing, BPM, stars), in pgvector
   replays.py   store an upload (original, Parquet frames, row); fetch the replay's map
   sync.py      save a player and their scores from osu! (upserts, one transaction)
   config.py    settings from env / .env

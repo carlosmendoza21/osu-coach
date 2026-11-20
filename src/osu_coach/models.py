@@ -6,6 +6,7 @@ send as null is `Mapped[X | None]` here, so syncing real data never hits NOT NUL
 
 from datetime import datetime
 
+from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
     BigInteger,
     DateTime,
@@ -15,6 +16,7 @@ from sqlalchemy import (
     Index,
     Integer,
     MetaData,
+    SmallInteger,
     String,
     func,
 )
@@ -247,5 +249,22 @@ class SkillProfile(Base):
     plays_used: Mapped[int] = mapped_column(Integer)
     plays_skipped: Mapped[int] = mapped_column(Integer)  # no attributes yet, or Relax...
     computed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class MapVector(Base):
+    """A map's pattern vector (see osu_coach.vectors): what the recommender compares."""
+
+    __tablename__ = "map_vectors"
+
+    # CASCADE: the vector belongs to the map.
+    beatmap_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("beatmaps.id", ondelete="CASCADE"), primary_key=True
+    )
+    # 11 numbers (vectors.FIELDS). Stored with pgvector, so Postgres can find the nearest.
+    vector: Mapped[list[float]] = mapped_column(Vector(11))
+    version: Mapped[int] = mapped_column(SmallInteger)  # vectors.VECTOR_VERSION when built
+    built_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )

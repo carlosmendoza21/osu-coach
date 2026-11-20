@@ -18,6 +18,7 @@ from osu_coach.config import get_settings
 from osu_coach.osu.client import OsuNotFoundError
 from osu_coach.worker import (
     analyze_replay,
+    build_map_vectors,
     celery_app,
     fetch_attributes,
     fetch_beatmap,
@@ -73,10 +74,42 @@ def test_unknown_player_fails_the_task() -> None:
     assert task.state == "FAILURE"
 
 
+def map_22423_vector() -> str | None:
+    engine = create_engine(get_settings().database_url)
+    with engine.connect() as conn:
+        sql = text("SELECT vector::text FROM map_vectors WHERE beatmap_id = 22423")
+        vector = conn.execute(sql).scalar()
+    engine.dispose()
+    return vector
+
+
+# Map 22423's pattern vector (tests/unit/test_vectors.py works it out from the file).
+VECTOR_22423 = "[0,0.0709,0.3307,0,0.1371,0.4032,0.2218,0.1411,0.0968,0.4667,0.3565]"
+
+
 def test_fetch_beatmap_through_the_worker() -> None:
     result = fetch_beatmap.delay(22423).get(timeout=TIMEOUT_S)
 
     assert result == {"beatmap_id": 22423, "version": "Hard", "objects": 254}
+    # The map's pattern vector is stored with it.
+    assert map_22423_vector() == VECTOR_22423
+
+
+def test_build_map_vectors_through_the_worker() -> None:
+    # Remove map 22423's vector in the dev database: the task builds it back, from the
+    # stored objects, the same as fetch_beatmap did; a second run finds nothing to build.
+    fetch_beatmap.delay(22423).get(timeout=TIMEOUT_S)  # make sure the map is stored
+    engine = create_engine(get_settings().database_url)
+    with engine.begin() as conn:
+        conn.execute(text("DELETE FROM map_vectors WHERE beatmap_id = 22423"))
+    engine.dispose()
+
+    first = build_map_vectors.delay().get(timeout=TIMEOUT_S)
+    again = build_map_vectors.delay().get(timeout=TIMEOUT_S)
+
+    assert first["built"] >= 1
+    assert again == {"built": 0}
+    assert map_22423_vector() == VECTOR_22423
 
 
 def test_fetch_beatmap_refuses_other_modes() -> None:

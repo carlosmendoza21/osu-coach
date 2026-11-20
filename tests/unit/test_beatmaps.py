@@ -25,6 +25,7 @@ from osu_coach.osu.files import BeatmapFileError, BeatmapFiles
 from osu_coach.osu.schemas import OsuBeatmap
 from osu_coach.osufile import OsuFileError, parse_osu
 from osu_coach.patterns import object_features
+from osu_coach.vectors import VECTOR_VERSION
 from tests.support import FIXTURES, load
 
 PG = postgresql.dialect()  # type: ignore[no-untyped-call]  # SQLAlchemy leaves it untyped
@@ -97,14 +98,16 @@ async def test_fetches_checks_and_stores_one_map() -> None:
     assert files.calls == [(22423, CHECKSUM)]
 
 
-async def test_writes_map_then_objects_then_commits_once() -> None:
+async def test_writes_map_then_objects_then_vector_then_commits_once() -> None:
     _, _, _, session = await run()
 
-    # The map row first (the objects reference it), then its objects are replaced.
+    # The map row first (the objects and vector reference it), then its objects are
+    # replaced and its pattern vector stored, all in one commit.
     assert session.events == [
         "INSERT INTO beatmaps",
         "DELETE FROM hit_objects",
         "INSERT INTO hit_objects",
+        "INSERT INTO map_vectors",
         "commit",
     ]
 
@@ -115,6 +118,19 @@ async def test_the_map_row_has_its_max_combo() -> None:
     upsert = session.statements[0][0].compile(dialect=PG)
     # A full fetch knows the max combo (a score's map data doesn't).
     assert upsert.params["max_combo_m0"] == 450
+
+
+async def test_the_maps_pattern_vector_is_stored() -> None:
+    _, _, _, session = await run()
+
+    insert = session.statements[3][0].compile(dialect=PG)
+    # Worked out from the file with the map's own CS, BPM (140) and stars (3.56): the
+    # same numbers tests/unit/test_vectors.py gets for map 22423.
+    assert insert.params["beatmap_id"] == 22423
+    assert insert.params["vector"] == [
+        0.0, 0.0709, 0.3307, 0.0, 0.1371, 0.4032, 0.2218, 0.1411, 0.0968, 0.4667, 0.3565,
+    ]  # fmt: skip
+    assert insert.params["version"] == VECTOR_VERSION
 
 
 async def test_every_object_is_stored_with_its_features() -> None:

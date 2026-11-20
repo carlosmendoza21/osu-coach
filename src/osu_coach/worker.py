@@ -25,6 +25,7 @@ from osu_coach.replays import MapChangedError
 from osu_coach.replays import fetch_replay_map as fetch_one_replay_map
 from osu_coach.skills import update_profile
 from osu_coach.sync import sync_player
+from osu_coach.vectors import build_missing_vectors
 
 settings = get_settings()
 
@@ -182,4 +183,20 @@ async def _fetch_attributes(osu_id: int) -> dict[str, Any]:
         }
     finally:
         await redis.aclose()
+        await engine.dispose()
+
+
+@celery_app.task(name="build_map_vectors")
+def build_map_vectors() -> dict[str, Any]:
+    """Build the pattern vector of every stored map that lacks one (or has an outdated
+    one). New maps get theirs from fetch_beatmap; this fills in the rest."""
+    return asyncio.run(_build_map_vectors(), loop_factory=asyncio.SelectorEventLoop)
+
+
+async def _build_map_vectors() -> dict[str, Any]:
+    engine = create_async_engine(settings.database_url, poolclass=NullPool)
+    try:
+        async with async_sessionmaker(engine)() as session:
+            return {"built": await build_missing_vectors(session)}
+    finally:
         await engine.dispose()

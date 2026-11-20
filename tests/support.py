@@ -18,7 +18,7 @@ FIXTURES = ROOT / "tests" / "fixtures" / "osu"
 # foreign keys between them don't refuse it). Add a new table here.
 ALL_TABLES = (
     "players, scores, beatmaps, hit_objects, replays, hit_results, beatmap_attributes, "
-    "skill_profiles"
+    "skill_profiles, map_vectors"
 )
 
 
