@@ -48,7 +48,7 @@ jobs:
           tests/integration/test_beatmaps_live.py tests/integration/test_replays_live.py
           tests/integration/test_analysis_live.py tests/integration/test_attributes_live.py
           tests/integration/test_skills_live.py tests/integration/test_vectors_live.py
-          tests/integration/test_candidates_live.py
+          tests/integration/test_candidates_live.py tests/integration/test_recommender_live.py
       - name: Migrations apply, match models, and roll back
         run: |
           uv run alembic upgrade head

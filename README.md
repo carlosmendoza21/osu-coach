@@ -32,6 +32,13 @@ docker compose up --build
   consistency, stamina, reading), each 0-100, with the strongest and weakest and how many
   plays they were scored from. Scored again each time their maps' attributes are fetched
   (after every sync); `409` until the first scoring, `404` for an unknown player
+- `GET /players/{osu_id}/recommendations`: 10 practice maps for the player's weakest
+  skill, each with a reason from real numbers ("AR 9; 4.3★, 0.6★ above your comfort
+  level (3.7★)"). The maps in a star range around their comfort level (the weighted
+  star rating of their plays, with mods) that are highest in what the skill needs
+  (jumps and wide gaps, streams, long streams, AR, OD or length), then the nearest their
+  style (pgvector), none they've played and one per mapset. Made with the skill
+  profile; `409` until then, `404` for an unknown player
 - Two Celery workers: `sync-worker` runs only player syncs (the `sync` queue), so a player
   search never waits behind background work; `worker` runs the rest (map downloads,
   attributes, replay analysis)
@@ -108,7 +115,7 @@ every push.
 On Windows, async database code needs a selector event loop (psycopg can't use the
 default one); `tests/conftest.py` sets it for the tests, and the worker task sets it too.
 
-**Unit tests** ([`tests/unit/`](tests/unit), 1079 tests): call the code directly with nothing
+**Unit tests** ([`tests/unit/`](tests/unit), 1116 tests): call the code directly with nothing
 running. `respx` fakes the osu! token endpoint (and blocks any unmocked request),
 `fakeredis` stands in for Redis, and the rate limiter gets a fake clock, so a 60 s window
 runs instantly.
@@ -392,6 +399,18 @@ would bring back the wait this avoids).
   is full, the last page or 3 pages ending it, a set on two pages picked once, and pages
   with nothing in the band read past
 
+*Recommending* (37), on hand-made maps:
+- The star range: a step up (+0.2 to +0.7) for most skills, at the comfort level (-0.4
+  to +0.1) for accuracy and consistency, 0.5 more each side per widening, rounded
+- What each skill needs, one per skill: jumps plus wide gaps, streams, long streams as
+  a share of all notes (none without streams), AR, OD, length
+- Choosing: the 20 highest in the need (maps with none left out), then the 10 of those
+  nearest the style, nearest first; the nearest maps cut when they're lowest in the
+  need; one difficulty per mapset, the first kept; nothing to choose from gives nothing
+- Reasons: each skill's numbers ("62% jumps, 31% of gaps over 4 circle widths", "4:05
+  of play to hold a combo through", "AR 10" without ".0"), then the level: above, below,
+  or right at it within 0.05 stars; an unknown skill is refused
+
 *Fetching a map* (17), with a fake client, file store and session:
 - One map is fetched, its file is asked for with osu!'s checksum, and the writes go map
   row (with its max combo) -> old objects deleted -> new objects inserted -> its pattern
@@ -457,7 +476,7 @@ statements are compiled to Postgres SQL:
 - The response has exactly the profile's fields, with the time in UTC; a username, a
   decimal or no id at all isn't an osu! id (`422`, `404`); the endpoint is documented
 
-**Integration tests** ([`tests/integration/`](tests/integration), 232 tests): use real
+**Integration tests** ([`tests/integration/`](tests/integration), 259 tests): use real
 Redis, real time, real processes, and the real osu! API with the credentials in `.env`.
 They skip with the reason if Redis isn't running (`docker compose up -d redis`) or the
 credentials are missing, and clean up their Redis keys even if a check fails.
@@ -600,10 +619,12 @@ osu! and file store, map 22423) is fetched with its 254 objects, not fetched aga
 stored, found in either letter case only with its hit objects, and a newer version is
 stored but refused as the replay's map.
 
-*Whole app* (11, the full stack running): over real HTTP, `/health`; peppy's profile with 50
+*Whole app* (13, the full stack running): over real HTTP, `/health`; peppy's profile with 50
 best plays sorted by pp; a repeat request served without a new sync; `404` for an unknown
 player; peppy's skills, scored after their sync, each 0-100 with the right strongest and
-weakest, and `404` for an unknown id's; both endpoints in the OpenAPI docs. Day 3's goal: uploading a replay on map 22423
+weakest, and `404` for an unknown id's; peppy's recommendations for their weakest skill,
+none they've played, one per mapset, each with its reason, and `404` for an unknown id's;
+the endpoints in the OpenAPI docs. Day 3's goal: uploading a replay on map 22423
 (whose objects are removed first) stores the replay and queues the map, the worker stores
 all 254 objects, and uploading again is `200` with the same replay and nothing queued; a
 bad file is `422`. Day 4's goal end to end: a replay playing map 22423 is uploaded with the
@@ -656,6 +677,28 @@ order; a map fetched since isn't fetched again but is still a candidate; a playe
 without objects is left to the sync; running again adds no rows; and osu! failing on the
 4th band keeps the 3 bands done.
 
+*Recommendations* (25, Postgres with pgvector; also run in CI), with players, plays and
+maps written in by hand:
+- The comfort level: a DT play at its DT rating, weighted 1, 0.95... (5.0 and 6.0 give
+  5.51); an NC+HD play matched to its "DT,HD" attributes; failed, taiko and
+  attribute-less plays left out; none without plays. The maps
+  played include failed and taiko plays. The style: the average of the played maps'
+  vectors (maps without one left out); none without vectors
+- The maps in range: nearest the style first, by pgvector distance; not loved, taiko,
+  vector-less or played maps; the bottom end in and the top end out. The hardest map:
+  only ranked maps with vectors
+- Recommending: the 10 highest-AR maps of 12 for a reading player, from 5.71-6.21 stars;
+  none without a profile or plays; a stamina player's range widened twice to reach the
+  only long-stream maps; a player above every map gets a range centred on the hardest
+  map, so it's in without widening
+- Storing: ranks 1-10, best score first, the skill, the comfort level and each reason
+  stored and committed; made again, replaced; cleared when no longer possible; another
+  player's untouched; deleting the player or a map deletes them
+- The endpoint, over this database: the maps in rank order (ranks reversed in the
+  database, so neither the picks' order nor the ids') with their details, the
+  skill and comfort level; `404` for an unknown player, `409` before scoring, `422` for
+  a non-number, and an empty list for a player scored before recommendations existed
+
 *Worker* (14, the full stack running): `fetch_beatmap` stores map 22423's 254 objects and
 its pattern vector (the one worked out from the file in the unit tests), and refuses a
 taiko map; `build_map_vectors` builds a removed vector back the same and then finds none.
@@ -669,8 +712,9 @@ it again, in either letter case), and fails with `OsuNotFoundError` for an unkno
 peppy's summary, repeated syncs don't duplicate rows, and an unknown player fails the task
 with `OsuNotFoundError`. `fetch_attributes` leaves none of peppy's plays without
 attributes, and a second run fetches none, and peppy's profile is scored again and
-stored as the task reports it; for an unknown player nothing is fetched and no profile is
-made. It writes to the dev database, like the app.
+stored as the task reports it, with recommendations for the weakest skill (as many
+stored as reported); for an unknown player nothing is fetched and no profile or
+recommendations are made. It writes to the dev database, like the app.
 
 **Frontend tests** ([`frontend/`](frontend), Vitest; also run in CI):
 
@@ -940,6 +984,18 @@ Both suites were checked against deliberately broken code:
   wanted, the same page every time, a set picked twice, one page only, the top band
   dropped, no max combo stored, one commit at the end, fetched maps fetched again, every
   map without objects fetched, and syncs on the default queue or everything on `sync`
+- Recommendations (31 breaks): failed plays or raw mods in the comfort level, a plain
+  average for it, played or unranked maps recommended, the range's top end included,
+  the farthest from the style first, accuracy a step up, a range that never widens or
+  widens one side, stamina as long streams alone, aim without wide gaps, several per
+  mapset, maps without the need kept, the lowest need first, the pool not cut, no final
+  order by style, no clamp or the first clamp above the pool, the strongest skill
+  trained, old ones kept or every player's cleared, ranks from 0, nothing committed, the
+  "right at" band too wide, above and below swapped, `409` for an unknown player, an
+  empty list before scoring, maps out of rank order, and the migration without either
+  CASCADE. Three first got through, all gaps in the tests (a single-mod play's key is
+  its mods anyway, the range widened past the old clamp's gap, and the picks' order
+  happened to be the ids'); a test for each was added
 
 `.gitattributes` marks `.osu` files as binary: git's `\r\n` to `\n` conversion would change
 a map file's MD5 and break the fixtures on other machines.
@@ -959,7 +1015,8 @@ Each makes at least one test fail.
 ```
 src/osu_coach/
   main.py      FastAPI app
-  api/         routers: /health, /players/{username}, /players/{osu_id}/skills, /replays/...
+  api/         routers: /health, /players/{username}, /players/{osu_id}/skills and
+               /recommendations, /replays/...
   osu/auth.py  osu! API token (client credentials), cached in Redis
   osu/ratelimiter.py  shared rate limit for osu! requests (sliding window in Redis)
   osu/retry.py        retries for temporary failures (backoff, jitter, Retry-After)
@@ -987,6 +1044,7 @@ src/osu_coach/
                fetch_replay_map, analyze_replay, fetch_attributes, build_map_vectors,
                collect_candidates
   candidates.py  well-known ranked maps in each star band, for the recommender
+  recommender.py  practice maps for a player's weakest skill, with reasons
 migrations/    Alembic
 frontend/      React + TypeScript (Vite): src/api.ts calls the API, src/types.ts its responses,
                src/pages/ the pages (home, player, upload, replay), src/components/ the

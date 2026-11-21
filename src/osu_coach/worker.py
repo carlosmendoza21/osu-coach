@@ -22,6 +22,7 @@ from osu_coach.osu.auth import TokenProvider
 from osu_coach.osu.client import OsuClient, OsuNotFoundError
 from osu_coach.osu.files import BeatmapFiles
 from osu_coach.osu.ratelimiter import RateLimiter
+from osu_coach.recommender import update_recommendations
 from osu_coach.replays import MapChangedError
 from osu_coach.replays import fetch_replay_map as fetch_one_replay_map
 from osu_coach.skills import update_profile
@@ -181,12 +182,17 @@ async def _fetch_attributes(osu_id: int) -> dict[str, Any]:
             result = await fetch_player_attributes(osu, session, osu_id)
             # The attributes are what the profile is scored from: score it again now.
             profile = await update_profile(session, osu_id)
+            # And the practice maps, which follow from the profile.
+            recs = await update_recommendations(session, osu_id) if profile else None
         return {
             "osu_id": osu_id,
             **asdict(result),
             "profile": None
             if profile is None
             else {**profile.scores, "plays_used": profile.plays_used},
+            "recommended": None
+            if recs is None
+            else {"skill": recs.skill, "comfort": recs.comfort, "maps": len(recs.picks)},
         }
     finally:
         await redis.aclose()

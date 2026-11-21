@@ -268,3 +268,23 @@ class MapVector(Base):
     built_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
+
+
+class Recommendation(Base):
+    """A practice map recommended to a player (see osu_coach.recommender)."""
+
+    __tablename__ = "recommendations"
+
+    # CASCADE both ways: recommendations belong to the player, and to a map that exists.
+    player_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("players.osu_id", ondelete="CASCADE"), primary_key=True
+    )
+    beatmap_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("beatmaps.id", ondelete="CASCADE"), primary_key=True
+    )
+    rank: Mapped[int] = mapped_column(SmallInteger)  # 1 is the best fit
+    target_skill: Mapped[str] = mapped_column(String(16))  # the skill it trains
+    score: Mapped[float] = mapped_column(Float)  # 0-1: how close to the target
+    reason: Mapped[str] = mapped_column(String(255))  # e.g. "62% jumps, ...; 5.8★, ..."
+    comfort_stars: Mapped[float] = mapped_column(Float)  # the player's level it's set from
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

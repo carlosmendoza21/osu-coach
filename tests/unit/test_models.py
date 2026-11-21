@@ -42,7 +42,7 @@ def field_allows_none(model: type[BaseModel], field: str) -> bool:
 
 def test_tables() -> None:
     tables = {"players", "scores", "beatmaps", "hit_objects", "replays", "hit_results",
-              "beatmap_attributes", "skill_profiles", "map_vectors"}  # fmt: skip
+              "beatmap_attributes", "skill_profiles", "map_vectors", "recommendations"}  # fmt: skip
     assert set(Base.metadata.tables) == tables
 
 

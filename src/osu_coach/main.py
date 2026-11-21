@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 
 from osu_coach import __version__
-from osu_coach.api import health, players, replays, skills
+from osu_coach.api import health, players, recommendations, replays, skills
 
 
 def create_app() -> FastAPI:
@@ -10,6 +10,7 @@ def create_app() -> FastAPI:
     app.include_router(players.router)
     app.include_router(replays.router)
     app.include_router(skills.router)
+    app.include_router(recommendations.router)
     return app
 
 

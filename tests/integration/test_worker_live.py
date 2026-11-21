@@ -188,7 +188,12 @@ def test_fetch_attributes_through_the_worker() -> None:
     again = fetch_attributes.delay(2).get(timeout=TIMEOUT_S)
 
     profile = again.pop("profile")
+    recommended = again.pop("recommended")
     assert again == {"osu_id": 2, "fetched": 0, "not_found": 0, "incomplete": 0}
+    # Practice maps are made again with the profile, for its weakest skill.
+    assert recommended["skill"] in profile_skills(profile)
+    assert recommended["comfort"] > 0
+    assert 0 < recommended["maps"] <= 10
     # The profile is scored again after the fetch, and stored.
     assert set(profile) == {"aim", "speed", "accuracy", "consistency", "stamina", "reading",
                             "plays_used"}  # fmt: skip
@@ -206,7 +211,16 @@ def test_fetch_attributes_through_the_worker() -> None:
     with engine.connect() as conn:
         row = conn.execute(text("SELECT aim, plays_used FROM skill_profiles WHERE player_id = 2"))
         assert tuple(row.one()) == (profile["aim"], profile["plays_used"])
+        sql = "SELECT count(*), min(target_skill) FROM recommendations WHERE player_id = 2"
+        count, skill = conn.execute(text(sql)).one()
+        assert (count, skill) == (recommended["maps"], recommended["skill"])
     engine.dispose()
+
+
+def profile_skills(profile: dict[str, float]) -> list[str]:
+    """The skills scored lowest in a task's profile (the weakest, or tied for it)."""
+    scores = {k: v for k, v in profile.items() if k != "plays_used"}
+    return [k for k, v in scores.items() if v == min(scores.values())]
 
 
 def test_fetch_attributes_for_an_unknown_player() -> None:
@@ -214,7 +228,7 @@ def test_fetch_attributes_for_an_unknown_player() -> None:
 
     # Nothing to fetch, and no profile: it would have no player to belong to.
     assert result == {"osu_id": 2**62, "fetched": 0, "not_found": 0, "incomplete": 0,
-                      "profile": None}  # fmt: skip
+                      "profile": None, "recommended": None}  # fmt: skip
 
 
 def test_syncs_have_a_worker_of_their_own() -> None:
