@@ -15,7 +15,7 @@ from typing import Any
 import pytest
 from pydantic import TypeAdapter, ValidationError
 
-from osu_coach.osu.schemas import OsuBeatmap, OsuScore, OsuUser, ScoreBeatmap
+from osu_coach.osu.schemas import OsuBeatmap, OsuScore, OsuUser, ScoreBeatmap, SearchResponse
 
 FIXTURES = Path(__file__).parent.parent / "fixtures" / "osu"
 SCORES = TypeAdapter(list[OsuScore])
@@ -372,3 +372,62 @@ def test_a_scores_beatmap_is_not_a_full_beatmap(score_json: dict[str, Any]) -> N
     errors = error_at(exc)
     assert ("max_combo", "missing") in errors
     assert ("beatmapset", "missing") in errors
+
+
+# ---------- Map search (GET /beatmapsets/search) ----------
+
+
+def test_real_search_page() -> None:
+    raw = load("search_5_stars.json")  # the first 4 mapsets of a real page, most played first
+    page = SearchResponse.model_validate(raw)
+
+    assert [s.id for s in page.beatmapsets] == [320118, 765778, 842412, 873811]
+    assert page.cursor_string == raw["cursor_string"]  # passed back for the next page
+    first = page.beatmapsets[0]
+    assert (first.artist, first.title, first.creator) == (
+        "Reol",
+        "No title",
+        raw["beatmapsets"][0]["creator"],
+    )
+    assert first.play_count == 132103440
+    # Every difficulty of the set, of any mode and star rating, not only the matches.
+    assert [len(s.beatmaps) for s in page.beatmapsets] == [14, 17, 10, 25]
+    modes = {b.mode for s in page.beatmapsets for b in s.beatmaps}
+    assert modes == {"osu", "fruits", "taiko"}
+
+
+def test_search_difficulties_have_what_a_map_row_needs() -> None:
+    raw = load("search_5_stars.json")
+    b = SearchResponse.model_validate(raw).beatmapsets[0].beatmaps[0]
+    src = raw["beatmapsets"][0]["beatmaps"][0]
+
+    assert (b.id, b.beatmapset_id, b.version) == (712376, 320118, "Insane")
+    assert b.difficulty_rating == src["difficulty_rating"]
+    # OD and HP come from osu!'s "accuracy" and "drain", as for every map.
+    assert (b.od, b.hp, b.ar, b.cs) == (src["accuracy"], src["drain"], src["ar"], src["cs"])
+    assert (b.max_combo, b.checksum, b.status) == (src["max_combo"], src["checksum"], "ranked")
+
+
+@pytest.mark.parametrize(
+    ("change", "cursor"),
+    [
+        ({"cursor_string": None}, None),  # edge: the last page has no cursor
+        ({"beatmapsets": []}, "keep"),  # edge: a search with no results
+    ],
+    ids=["last-page", "no-results"],
+)
+def test_search_edges(change: dict[str, Any], cursor: str | None) -> None:
+    raw = {**load("search_5_stars.json"), **change}
+
+    page = SearchResponse.model_validate(raw)
+
+    assert page.cursor_string == (raw["cursor_string"] if cursor == "keep" else cursor)
+    assert len(page.beatmapsets) == len(raw["beatmapsets"])
+
+
+def test_a_search_without_its_sets_is_refused() -> None:
+    raw = load("search_5_stars.json")
+    del raw["beatmapsets"]
+
+    with pytest.raises(ValidationError):
+        SearchResponse.model_validate(raw)

@@ -32,6 +32,12 @@ docker compose up --build
   consistency, stamina, reading), each 0-100, with the strongest and weakest and how many
   plays they were scored from. Scored again each time their maps' attributes are fetched
   (after every sync); `409` until the first scoring, `404` for an unknown player
+- Two Celery workers: `sync-worker` runs only player syncs (the `sync` queue), so a player
+  search never waits behind background work; `worker` runs the rest (map downloads,
+  attributes, replay analysis)
+- Candidate maps for the recommender: the `collect_candidates` task finds about 25 well
+  known ranked maps in each half-star band from 2 to 9 stars and queues their downloads
+  (about 15 minutes the first time, within osu!'s rate limit)
 - Postgres 16 + pgvector on `5432`, Redis on `6379`
 - The `migrate` service runs `alembic upgrade head` before the API and worker start.
 
@@ -102,7 +108,7 @@ every push.
 On Windows, async database code needs a selector event loop (psycopg can't use the
 default one); `tests/conftest.py` sets it for the tests, and the worker task sets it too.
 
-**Unit tests** ([`tests/unit/`](tests/unit), 1040 tests): call the code directly with nothing
+**Unit tests** ([`tests/unit/`](tests/unit), 1079 tests): call the code directly with nothing
 running. `respx` fakes the osu! token endpoint (and blocks any unmocked request),
 `fakeredis` stands in for Redis, and the rate limiter gets a fake clock, so a 60 s window
 runs instantly.
@@ -144,7 +150,7 @@ runs instantly.
 - Network errors (connect, timeouts, dropped connections) back off and are raised on the
   last attempt; our own bugs and errors like redirect loops are never retried
 
-*API models* (52), using real osu! responses saved in
+*API models* (57), using real osu! responses saved in
 [`tests/fixtures/osu/`](tests/fixtures/osu) (a profile, three best scores, a failed play,
 and a full beatmap):
 - Real users and scores parse with the right values; osu!'s ~70 user fields are reduced
@@ -161,8 +167,12 @@ and a full beatmap):
   mode and the mapset (artist, title, creator), inheriting the `od`/`hp` aliases; the
   mapset is not typed as a difficulty; a score's partial beatmap isn't accepted as a full
   one
+- A real map search page (its first 4 mapsets): the sets in order with their play
+  counts and every difficulty of every mode (catch and taiko too), each with what a map
+  row needs (`od`/`hp` from `accuracy`/`drain`, max combo, checksum); the last page's
+  null cursor and an empty result parse; a page without its sets is refused
 
-*API client* (59), with osu! faked by `respx`, fakeredis, a fake clock for the rate limiter,
+*API client* (62), with osu! faked by `respx`, fakeredis, a fake clock for the rate limiter,
 and recorded retry waits:
 - Requests: users by id (`key=id`) or username (`key=username`, escaped: spaces,
   brackets, `/`, and all-digit names), best and recent scores with the right `mode`,
@@ -182,6 +192,9 @@ and recorded retry waits:
   the path), lowercased first; 8 kinds of bad checksum (wrong length, not hex, spaces, a
   trailing newline, dashes) are refused before any request, token fetch or rate-limit
   slot, with the rejected value in the message
+- Map search: ranked (`s=ranked`) osu! standard (`m=0`) mapsets, most played first, with
+  the star range in the text query (`stars>=5.0 stars<5.5`); a first page sends no
+  cursor and the next sends the last one's; rate limited and retried like the rest
 
 *`.osu` files* (29), with osu.ppy.sh faked by `respx`, a temporary folder, and two real
 map files saved in [`tests/fixtures/osu/`](tests/fixtures/osu) (one with `\r\n` line
@@ -361,9 +374,23 @@ no longer reports AR or OD with mods, so there's nothing live to check):
 - The play's windows, worked out by hand: OD 10, 9.5 and 7, HR (OD 9.8), EZ, and DT/NC/HT
   in real time (OD 7 with DT: 25, 55.67, 86.33 ms); a missing map says so
 
-*Worker tasks* (2): the tasks' names, and the errors declared as expected (`throws=`), so
+*Worker tasks* (10): the tasks' names, and the errors declared as expected (`throws=`), so
 Celery logs a missing player, a taiko map, a changed map, an unknown replay, a map not
-stored yet or unsupported mods in one line instead of a traceback.
+stored yet or unsupported mods in one line instead of a traceback. Syncs are routed to
+the `sync` queue, and every other task to the default queue (a map download on `sync`
+would bring back the wait this avoids).
+
+*Candidate maps* (23), on hand-made mapsets, a real search page and a fake osu!:
+- 14 half-star bands from 2 to 9, each starting where the last ends
+- Picking a band's maps: the low end in and the high end out (5.4999 in, 5.5 out); one
+  per mapset, the one nearest the band's middle; only ranked osu! standard difficulties
+  (a taiko or loved one in a ranked set is skipped); the sets' order kept; no more than
+  wanted, sets with nothing in the band not counting, and none when none are wanted. On
+  the real page: Reol's No title [Insane], Make a Move's 5.42 over its 5.06 and 5.08,
+  Harumachi Clover's only one, and quaver's 5.21
+- Reading pages: one page when it's enough, more with each last cursor until the band
+  is full, the last page or 3 pages ending it, a set on two pages picked once, and pages
+  with nothing in the band read past
 
 *Fetching a map* (17), with a fake client, file store and session:
 - One map is fetched, its file is asked for with osu!'s checksum, and the writes go map
@@ -430,7 +457,7 @@ statements are compiled to Postgres SQL:
 - The response has exactly the profile's fields, with the time in UTC; a username, a
   decimal or no id at all isn't an osu! id (`422`, `404`); the endpoint is documented
 
-**Integration tests** ([`tests/integration/`](tests/integration), 222 tests): use real
+**Integration tests** ([`tests/integration/`](tests/integration), 232 tests): use real
 Redis, real time, real processes, and the real osu! API with the credentials in `.env`.
 They skip with the reason if Redis isn't running (`docker compose up -d redis`) or the
 credentials are missing, and clean up their Redis keys even if a check fails.
@@ -454,7 +481,7 @@ credentials are missing, and clean up their Redis keys even if a check fails.
   username, 50 best scores each for the top 3, and recent plays including fails
 - An unknown username returns `404`
 
-*API client* (16, real osu! and Redis):
+*API client* (17, real osu! and Redis):
 - The same player by username and by id; 50 best scores, best first, and `limit=5`
   matching the first five; recent plays of the current top 10
 - Unknown usernames, including the all-digit `"2"`, raise `OsuNotFoundError`
@@ -463,6 +490,8 @@ credentials are missing, and clean up their Redis keys even if a check fails.
 - Beatmap 22423 matches the saved fixture; looking it up by its checksum (either case)
   finds the same map, as does looking up a real score's map; unknown ids and checksums
   are not found; a bad checksum never reaches osu!
+- Map search: 50 mapsets at 5-5.5 stars, each with a ranked osu! standard difficulty in
+  the band, most played first, and the next page carrying on without repeats
 - Map attributes: nomod, the star rating and max combo are the map's own; DT is harder;
   and osu! itself confirms the mod keys' assumptions: NC's answer equals DT's and SD's
   equals nomod's; an unknown map is not found
@@ -620,9 +649,19 @@ building every missing vector commits each and then finds none. Ordering maps by
 pgvector distance to an all-streams target gives the stream map, then the jump map, then
 the slider map.
 
-*Worker* (12, the full stack running): `fetch_beatmap` stores map 22423's 254 objects and
+*Candidate maps stored* (7, Postgres; also run in CI), with a fake osu! serving one page
+per band: every band searched once; the candidates' rows stored (the set's artist and
+title, the difficulty's own stars, max combo and checksum) and all of them to fetch, in
+order; a map fetched since isn't fetched again but is still a candidate; a played map
+without objects is left to the sync; running again adds no rows; and osu! failing on the
+4th band keeps the 3 bands done.
+
+*Worker* (14, the full stack running): `fetch_beatmap` stores map 22423's 254 objects and
 its pattern vector (the one worked out from the file in the unit tests), and refuses a
-taiko map; `build_map_vectors` builds a removed vector back the same and then finds none. `fetch_replay_map` finds map 22423 by its checksum (and doesn't fetch
+taiko map; `build_map_vectors` builds a removed vector back the same and then finds none.
+One worker takes only syncs and another the background work, and nothing else listens
+on `sync`. `collect_candidates` on real osu! finds at least 20 maps in each of the 14
+bands. `fetch_replay_map` finds map 22423 by its checksum (and doesn't fetch
 it again, in either letter case), and fails with `OsuNotFoundError` for an unknown file.
 `analyze_replay` fails with `ReplayNotFoundError` for a replay that doesn't exist. A sync queues `fetch_beatmap` for the player's maps without objects
 (a removed map is fetched back with all 254 objects), and a second sync queues none.
@@ -894,6 +933,13 @@ Both suites were checked against deliberately broken code:
   stars, and the migration without CASCADE or without the extension. The BPM-and-stars
   swap first got through (only the worker test, run against the live stack, saw the
   values); a unit test now checks the vector `fetch_beatmap` stores
+- Map search, candidates and the sync queue (21 breaks): any status or no most-played
+  order in the search, stars above rather than from the low end, the cursor never sent,
+  the band's high end included or low end left out, any mode or status picked, the first
+  fit rather than the nearest the middle, every fit of a set, too many when none are
+  wanted, the same page every time, a set picked twice, one page only, the top band
+  dropped, no max combo stored, one commit at the end, fetched maps fetched again, every
+  map without objects fetched, and syncs on the default queue or everything on `sync`
 
 `.gitattributes` marks `.osu` files as binary: git's `\r\n` to `\n` conversion would change
 a map file's MD5 and break the fixtures on other machines.
@@ -937,8 +983,10 @@ src/osu_coach/
   config.py    settings from env / .env
   db.py        async SQLAlchemy engine + session dependency
   models.py    the database tables
-  worker.py    Celery app and its tasks: osu_sync, fetch_beatmap, fetch_replay_map,
-               analyze_replay
+  worker.py    Celery app and its tasks: osu_sync (on its own queue), fetch_beatmap,
+               fetch_replay_map, analyze_replay, fetch_attributes, build_map_vectors,
+               collect_candidates
+  candidates.py  well-known ranked maps in each star band, for the recommender
 migrations/    Alembic
 frontend/      React + TypeScript (Vite): src/api.ts calls the API, src/types.ts its responses,
                src/pages/ the pages (home, player, upload, replay), src/components/ the

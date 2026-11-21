@@ -115,6 +115,27 @@ class OsuBeatmap(ScoreBeatmap):
 # ---------- POST /beatmaps/{beatmap}/attributes ----------
 
 
+class SearchBeatmap(ScoreBeatmap):
+    """One difficulty in a search result: a score's beatmap fields, plus its max combo."""
+
+    max_combo: int | None
+
+
+class SearchBeatmapset(ScoreBeatmapset):
+    """A mapset in a search result, with all its difficulties (of every mode and star
+    rating, not only those the search matched)."""
+
+    play_count: int
+    beatmaps: list[SearchBeatmap]
+
+
+class SearchResponse(OsuModel):
+    """One page of GET /beatmapsets/search: up to 50 mapsets."""
+
+    beatmapsets: list[SearchBeatmapset]
+    cursor_string: str | None  # pass it back for the next page; null on the last
+
+
 class DifficultyAttributes(OsuModel):
     """A map's difficulty with some mods, as osu!'s star rating calculation sees it.
 

@@ -50,10 +50,21 @@ services:
       timeout: 3s
       retries: 20
 
+  # Background work: map downloads, attributes, replay analysis (Celery's default queue).
   worker:
     build: .
     command: ["celery", "-A", "osu_coach.worker", "worker", "--loglevel=info", "--concurrency=2"]
     volumes: [appdata:/app/data]
+    environment: *app-env
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      redis: { condition: service_healthy }
+
+  # Player syncs only (the "sync" queue): a search never waits behind background work.
+  sync-worker:
+    build: .
+    command: ["celery", "-A", "osu_coach.worker", "worker", "--loglevel=info", "--concurrency=2",
+              "-Q", "sync", "--hostname=sync@%h"]
     environment: *app-env
     depends_on:
       migrate: { condition: service_completed_successfully }

@@ -20,6 +20,7 @@ from osu_coach.worker import (
     analyze_replay,
     build_map_vectors,
     celery_app,
+    collect_candidates,
     fetch_attributes,
     fetch_beatmap,
     fetch_replay_map,
@@ -214,3 +215,35 @@ def test_fetch_attributes_for_an_unknown_player() -> None:
     # Nothing to fetch, and no profile: it would have no player to belong to.
     assert result == {"osu_id": 2**62, "fetched": 0, "not_found": 0, "incomplete": 0,
                       "profile": None}  # fmt: skip
+
+
+def test_syncs_have_a_worker_of_their_own() -> None:
+    # Each running worker and the queues it takes tasks from.
+    queues = celery_app.control.inspect(timeout=5).active_queues() or {}
+    by_worker = {name: sorted(q["name"] for q in qs) for name, qs in queues.items()}
+
+    sync_workers = [n for n, q in by_worker.items() if q == ["sync"]]
+    default_workers = [n for n, q in by_worker.items() if q == ["celery"]]
+    assert sync_workers, f"no worker takes only syncs: {by_worker}"
+    assert default_workers, f"no worker takes the background work: {by_worker}"
+    # Nothing else listens on "sync", so syncs never share a worker with background work.
+    assert all(q in (["sync"], ["celery"]) for q in by_worker.values()), by_worker
+
+
+def test_collect_candidates_through_the_worker() -> None:
+    # 14 searches on real osu!: candidates in every band (most were stored by earlier
+    # runs, so few or no maps are queued for fetching).
+    result = collect_candidates.delay().get(timeout=TIMEOUT_S * 2)
+
+    assert set(result) == {"maps", "maps_queued"}
+    assert result["maps"] >= 14 * 20  # about 25 per band; a few bands may have fewer
+    assert 0 <= result["maps_queued"] <= result["maps"]
+    engine = create_engine(get_settings().database_url)
+    with engine.connect() as conn:
+        sql = (
+            "SELECT count(DISTINCT floor(star_rating * 2)) FROM beatmaps "
+            "WHERE status = 'ranked' AND mode = 'osu' AND star_rating >= 2 AND star_rating < 9"
+        )
+        bands_stored = conn.execute(text(sql)).scalar()
+    engine.dispose()
+    assert bands_stored == 14

@@ -48,6 +48,7 @@ jobs:
           tests/integration/test_beatmaps_live.py tests/integration/test_replays_live.py
           tests/integration/test_analysis_live.py tests/integration/test_attributes_live.py
           tests/integration/test_skills_live.py tests/integration/test_vectors_live.py
+          tests/integration/test_candidates_live.py
       - name: Migrations apply, match models, and roll back
         run: |
           uv run alembic upgrade head
@@ -65,6 +66,15 @@ jobs:
         run: curl --fail --silent --show-error http://localhost:8000/health
       - name: Check worker is up
         run: docker compose exec -T worker celery -A osu_coach.worker inspect ping --timeout 20
+      - name: Check sync worker is up
+        # Pings this worker only (by its name), so a missing sync worker can't pass on the
+        # other worker's answer. A few tries: it may still be starting.
+        run: |
+          for try in 1 2 3 4 5; do
+            docker compose exec -T sync-worker sh -c 'celery -A osu_coach.worker inspect ping --timeout 10 -d "sync@$(hostname)"' && exit 0
+            sleep 5
+          done
+          exit 1
       - name: Logs on failure
         if: failure()
         run: docker compose logs

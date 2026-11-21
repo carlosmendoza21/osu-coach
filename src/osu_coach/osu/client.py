@@ -19,6 +19,7 @@ from osu_coach.osu.schemas import (
     OsuBeatmap,
     OsuScore,
     OsuUser,
+    SearchResponse,
 )
 
 API_URL = "https://osu.ppy.sh/api/v2"
@@ -157,6 +158,24 @@ class OsuClient:
                     f"osu! has only a star rating for map {beatmap_id} (not ranked?)"
                 ) from None
             raise
+
+    async def search_beatmapsets(
+        self, min_stars: float, max_stars: float, cursor: str | None = None
+    ) -> SearchResponse:
+        """One page of ranked osu! standard mapsets with a difficulty from min_stars up to
+        (not including) max_stars, most played first. `cursor` is the previous page's
+        cursor_string, for the next page."""
+        params: dict[str, Any] = {
+            "m": 0,  # osu! standard
+            "s": "ranked",
+            "sort": "plays_desc",
+            # osu!'s search filters go in the text query, as on the website.
+            "q": f"stars>={min_stars} stars<{max_stars}",
+        }
+        if cursor is not None:
+            params["cursor_string"] = cursor
+        response = await self._get("/beatmapsets/search", params)
+        return SearchResponse.model_validate_json(response.content)
 
     async def lookup_beatmap(self, checksum: str) -> OsuBeatmap:
         """A beatmap by the MD5 checksum of its .osu file (what a replay records)."""

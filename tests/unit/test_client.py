@@ -492,6 +492,50 @@ async def test_beatmap_requests_take_rate_limit_slots(env: Env, osu: OsuClient) 
     assert await env.redis.zcard(RATE_KEY) == 2
 
 
+# ---------- Map search ----------
+
+
+def search_reply() -> httpx.Response:
+    return httpx.Response(200, json=load("search_5_stars.json"))
+
+
+async def test_search_asks_for_ranked_standard_maps_most_played_first(
+    env: Env, osu: OsuClient
+) -> None:
+    route = env.api("/beatmapsets/search").mock(return_value=search_reply())
+
+    page = await osu.search_beatmapsets(5.0, 5.5)
+
+    # The star range is in the text query, as on the website; a first page has no cursor.
+    assert query(route) == {
+        "m": "0",
+        "s": "ranked",
+        "sort": "plays_desc",
+        "q": "stars>=5.0 stars<5.5",
+    }
+    assert [s.id for s in page.beatmapsets] == [320118, 765778, 842412, 873811]
+    assert page.cursor_string == load("search_5_stars.json")["cursor_string"]
+
+
+async def test_search_passes_the_cursor_for_the_next_page(env: Env, osu: OsuClient) -> None:
+    route = env.api("/beatmapsets/search").mock(return_value=search_reply())
+
+    await osu.search_beatmapsets(2.0, 2.5, cursor="abc123")
+
+    assert query(route)["cursor_string"] == "abc123"
+    assert query(route)["q"] == "stars>=2.0 stars<2.5"
+
+
+async def test_search_is_rate_limited_and_retried(env: Env, osu: OsuClient) -> None:
+    route = env.api("/beatmapsets/search").mock(side_effect=[httpx.Response(503), search_reply()])
+
+    await osu.search_beatmapsets(5.0, 5.5)
+
+    assert route.call_count == 2
+    assert len(env.retry_waits) == 1
+    assert await env.redis.zcard(RATE_KEY) == 2  # each try took a slot
+
+
 # ---------- Beatmap attributes (a POST) ----------
 
 

@@ -15,6 +15,7 @@ from osu_coach.analysis import analyze_replay as analyze_one_replay
 from osu_coach.attributes import fetch_player_attributes
 from osu_coach.beatmaps import UnsupportedModeError, maps_to_fetch
 from osu_coach.beatmaps import fetch_beatmap as fetch_one_beatmap
+from osu_coach.candidates import collect_candidates as collect_candidate_maps
 from osu_coach.config import get_settings
 from osu_coach.difficulty import UnsupportedModsError
 from osu_coach.osu.auth import TokenProvider
@@ -30,6 +31,12 @@ from osu_coach.vectors import build_missing_vectors
 settings = get_settings()
 
 celery_app = Celery("osu_coach", broker=settings.redis_url, backend=settings.redis_url)
+
+# Syncs have a queue (and worker) of their own: a player search waits on its sync, so it
+# must never queue behind background work like a few hundred map downloads. Every other
+# task goes to Celery's default queue.
+SYNC_QUEUE = "sync"
+celery_app.conf.task_routes = {"osu_sync": {"queue": SYNC_QUEUE}}
 
 
 # throws=: these errors are expected outcomes (a player or map that doesn't exist, a map
@@ -199,4 +206,33 @@ async def _build_map_vectors() -> dict[str, Any]:
         async with async_sessionmaker(engine)() as session:
             return {"built": await build_missing_vectors(session)}
     finally:
+        await engine.dispose()
+
+
+@celery_app.task(name="collect_candidates")
+def collect_candidates() -> dict[str, Any]:
+    """Find well-known ranked maps at every level for the recommender, then queue a
+    fetch_beatmap (objects and pattern vector) for each one not stored yet."""
+    return asyncio.run(_collect_candidates(), loop_factory=asyncio.SelectorEventLoop)
+
+
+async def _collect_candidates() -> dict[str, Any]:
+    engine = create_async_engine(settings.database_url, poolclass=NullPool)
+    redis: Redis = Redis.from_url(settings.redis_url)
+
+    try:
+        async with (
+            httpx.AsyncClient(timeout=20) as http,
+            async_sessionmaker(engine)() as session,
+        ):
+            tokens = TokenProvider(http, redis, settings.osu_client_id, settings.osu_client_secret)
+            osu = OsuClient(http, tokens, RateLimiter(redis))
+            result = await collect_candidate_maps(osu, session)
+        # One task per map, as after a sync. They go to the default queue, so the
+        # hundreds of them a first run queues never hold up a player's sync.
+        for beatmap_id in result.to_fetch:
+            fetch_beatmap.delay(beatmap_id)
+        return {"maps": result.maps, "maps_queued": len(result.to_fetch)}
+    finally:
+        await redis.aclose()
         await engine.dispose()

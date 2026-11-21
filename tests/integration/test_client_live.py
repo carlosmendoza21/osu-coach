@@ -147,6 +147,26 @@ async def test_get_beatmap_matches_the_saved_sample(live: Live) -> None:
     assert (beatmap.od, beatmap.hp) == (saved["accuracy"], saved["drain"])
 
 
+async def test_search_finds_ranked_standard_maps_in_the_band(live: Live) -> None:
+    first = await live.osu.search_beatmapsets(5.0, 5.5)
+    assert first.cursor_string is not None  # thousands of ranked sets at 5 stars
+    second = await live.osu.search_beatmapsets(5.0, 5.5, first.cursor_string)
+
+    assert len(first.beatmapsets) == 50
+    for s in first.beatmapsets + second.beatmapsets:
+        # Every set has a ranked osu! standard difficulty in the band (osu!'s filter),
+        # whatever else it has.
+        assert any(
+            b.mode == "osu" and b.status == "ranked" and 5.0 <= b.difficulty_rating < 5.5
+            for b in s.beatmaps
+        ), s.id
+    # Most played first, and the next page carries on rather than repeating.
+    plays = [s.play_count for s in first.beatmapsets]
+    assert plays == sorted(plays, reverse=True)
+    assert not {s.id for s in first.beatmapsets} & {s.id for s in second.beatmapsets}
+    assert second.beatmapsets[0].play_count <= plays[-1]
+
+
 async def test_lookup_finds_the_same_map_by_checksum(live: Live) -> None:
     beatmap = await live.osu.get_beatmap(22423)
     assert beatmap.checksum is not None
