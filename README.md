@@ -718,7 +718,7 @@ recommendations are made. It writes to the dev database, like the app.
 
 **Frontend tests** ([`frontend/`](frontend), Vitest; also run in CI):
 
-*Unit* (266, `npm test`), with `fetch` replaced:
+*Unit* (302, `npm test`), with `fetch` replaced:
 - `api.ts`: each call's URL, under the proxied `/api`, with player names escaped (a space,
   a slash or a `?` can't break the path); an upload posts the file as the `file` form
   field, without a hand-set Content-Type (the browser adds multipart's boundary); the JSON
@@ -755,6 +755,22 @@ recommendations are made. It writes to the dev database, like the app.
   last player's profile nor a late answer for them ever shows for the new one. The radar
   itself, with Recharts given a fixed size: its six labels round from the top, and each
   point as far out as its score on a fixed 0-100 scale (a best of 50 reaches halfway)
+- Waiting on the API (13, the hook both panels share, with fake timers): loading, then
+  the data asked for once; on a `409`, asked again every poll and not sooner, the data
+  once ready, and given up on after the limit (one request per poll until then); any
+  other error passed on and not asked again; a new id loading until its own answer, a
+  late answer for the last id never shown, and the last id's or a left page's asking
+  stopped
+- Practice maps on the profile page (15): asked for by osu! id, shown under the skills
+  and above the plays, and an error there leaves the rest of the page as it is. The
+  heading names the skill and the comfort level; the maps in a numbered list in the
+  API's order, each linked to osu! (a new tab that can't reach back) with its mapper,
+  stars, rounded BPM, AR, OD, length and reason. Not picked yet (a `409`, or none made
+  for a player scored before they existed: opening the page syncs them) shows "Picking
+  practice maps..." until they're in, and is given up on after 5 minutes; made but
+  nothing fitting has its own message; a `404`, a `500` or no answer each explained
+- `formatLength`: minutes and padded seconds (`2:05`, `0:59`, `1:00`), over an hour as
+  minutes (`75:00`), rounded, never negative
 - Analysis formatting: osu!'s accuracy formula (a 100 a third, a 50 a sixth; 0 objects
   give 0, not NaN; FREEDOM DiVE's counts give osu!'s 99.58%), "1.8 ms early / late / on
   time" (within 0.05 ms), UR and pixels; upload errors (413, 422 with the parser's
@@ -789,13 +805,14 @@ recommendations are made. It writes to the dev database, like the app.
   charts, an error saying only the charts are missing, and a late answer for another
   replay never replacing them
 
-*Live* (7, `npm run test:live`; needs the API running, skips otherwise): a real Vite dev
+*Live* (8, `npm run test:live`; needs the API running, skips otherwise): a real Vite dev
 server is started with `vite.config.ts`, and `api.ts` calls the API through its proxy:
 `/health` answers; an unknown replay is the API's `404` with its reason; an upload reaches
 the parser (so the form field name is right); peppy's profile and plays have exactly the
 fields `types.ts` declares, no more and no fewer, and every play comes with its map;
 peppy's skills (checked until scored) have exactly the declared fields, and an unknown
-player's are the API's `404` with its reason; and a
+player's are the API's `404` with its reason; peppy's practice maps (checked until picked)
+and each map's fields are exactly as declared, ranked 1 onwards; and a
 real replay from `data/replays/` uploads and is checked until analyzed, as the replay page
 does, with its detail's fields (every pattern's too) as declared and our counts matching
 osu!'s; its chart data has the declared fields and exactly the notes and misses its
@@ -938,6 +955,13 @@ Both suites were checked against deliberately broken code:
   the old profile was never on screen when the id changed, the highest sample score
   rounded up to 100 anyway, and the tables weren't in the order check); a test for each
   was added
+- Practice maps and the shared waiting (22 breaks): a `409` not asked again, every error
+  asked again, never giving up, the asking not stopped on leaving, late answers or
+  another id's result shown, the internal id leaking to callers, none made yet shown as
+  made, no message when nothing fits, maps linked to their mapset, a link that can reach
+  back, BPM not rounded, no mapper, no reason, the `404` not explained, no comfort
+  level, an unordered list, seconds not padded, negative lengths, the wrong URL, and the
+  panel missing or above the skills
 - `charts.py` and its endpoint (13 breaks): song time instead of real time or the rate the
   wrong way, speed mods ignored, HR not flipped or flipped sideways, aim not rounded, the
   join ignoring the map, notes out of map order, the playfield's right edge counted in,

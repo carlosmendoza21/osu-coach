@@ -184,6 +184,32 @@ a {
   }
 }
 
+/* ---------- Practice maps ---------- */
+
+.recommendations h3 .muted {
+  font-size: 0.9rem;
+  font-weight: 400;
+}
+
+.practice {
+  margin: 0;
+  padding-left: 1.5rem;
+}
+
+.practice li {
+  margin-bottom: 0.75rem;
+}
+
+.practice-stats {
+  color: var(--muted);
+  font-size: 0.9rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.practice-reason {
+  font-size: 0.9rem;
+}
+
 /* ---------- Score tables ---------- */
 
 table.scores {

@@ -1,5 +1,14 @@
 // Sample API data for tests, shaped like the real responses (src/types.ts).
-import type { ChartNote, PlayerResponse, ReplayCharts, ReplayDetail, Score, Skills } from '../types'
+import type {
+  ChartNote,
+  PlayerResponse,
+  Recommendation,
+  Recommendations,
+  ReplayCharts,
+  ReplayDetail,
+  Score,
+  Skills,
+} from '../types'
 
 export function score(changes: Partial<Score> = {}): Score {
   return {
@@ -164,6 +173,39 @@ export function skills(changes: Partial<Skills> = {}): Skills {
     plays_used: 50,
     plays_skipped: 0,
     computed_at: '2026-11-18T05:23:06Z',
+    ...changes,
+  }
+}
+
+export function recommendation(rank: number, changes: Partial<Recommendation['beatmap']> = {}): Recommendation {
+  return {
+    rank,
+    score: 0.9 - rank / 100,
+    reason: `AR ${8.4 + rank / 10}; 4.${rank}★, 0.${rank}★ above your comfort level (3.7★)`,
+    beatmap: {
+      id: 1000 + rank,
+      beatmapset_id: 500 + rank,
+      artist: `Artist ${rank}`,
+      title: `Title ${rank}`,
+      version: 'Insane',
+      creator: 'Mapper',
+      star_rating: 4 + rank / 10,
+      bpm: 170.4,
+      ar: 8.4 + rank / 10,
+      od: 8,
+      hit_length_s: 125,
+      ...changes,
+    },
+  }
+}
+
+export function recommendations(changes: Partial<Recommendations> = {}): Recommendations {
+  return {
+    player_id: 2,
+    target_skill: 'reading',
+    comfort_stars: 3.68,
+    created_at: '2026-11-21T05:25:20Z',
+    maps: [1, 2, 3].map((rank) => recommendation(rank)),
     ...changes,
   }
 }

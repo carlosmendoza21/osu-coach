@@ -11,6 +11,7 @@ import {
   formatPp,
   formatPx,
   formatRank,
+  formatLength,
   formatStars,
   formatTiming,
   formatUr,
@@ -157,4 +158,18 @@ test.each([
   [null, '-'],
 ])('formatPx %s -> %s', (px, text) => {
   expect(formatPx(px)).toBe(text)
+})
+
+describe('formatLength', () => {
+  test.each([
+    [125, '2:05'],
+    [59, '0:59'],
+    [60, '1:00'], // edge: a whole minute
+    [0, '0:00'],
+    [4500, '75:00'], // edge: over an hour stays in minutes
+    [89.6, '1:30'], // rounded to the nearest second
+    [-5, '0:00'], // edge: never negative
+  ])('%s s is %s', (seconds, text) => {
+    expect(formatLength(seconds)).toBe(text)
+  })
 })

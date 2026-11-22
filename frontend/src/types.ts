@@ -142,3 +142,33 @@ export interface Skills extends Record<SkillName, number> {
   plays_skipped: number // plays without attributes yet, or with Relax and the like
   computed_at: string // ISO time
 }
+
+// GET /players/{osu_id}/recommendations
+export interface RecommendedMap {
+  id: number
+  beatmapset_id: number
+  artist: string
+  title: string
+  version: string // the difficulty name
+  creator: string // the mapper
+  star_rating: number
+  bpm: number
+  ar: number
+  od: number
+  hit_length_s: number // seconds of play
+}
+
+export interface Recommendation {
+  rank: number // 1 is the best fit
+  score: number // 0-1: how close the map is to the player's style
+  reason: string // e.g. "AR 9; 4.3★, 0.6★ above your comfort level (3.7★)"
+  beatmap: RecommendedMap
+}
+
+export interface Recommendations {
+  player_id: number
+  target_skill: SkillName | null // the weakest skill; null until recommendations are made
+  comfort_stars: number | null // the level they're set from
+  created_at: string | null // ISO time
+  maps: Recommendation[] // best first; empty until made (or if none fit)
+}

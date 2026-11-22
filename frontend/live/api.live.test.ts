@@ -11,11 +11,23 @@ import { resolve } from 'node:path'
 import { type ViteDevServer, createServer } from 'vite'
 import { afterAll, beforeAll, describe, expect, test, vi } from 'vitest'
 
-import { ApiError, getHealth, getPlayer, getReplay, getReplayCharts, getSkills, uploadReplay } from '../src/api'
+import {
+  ApiError,
+  getHealth,
+  getPlayer,
+  getRecommendations,
+  getReplay,
+  getReplayCharts,
+  getSkills,
+  uploadReplay,
+} from '../src/api'
 import type {
   Beatmap,
   ChartNote,
   Player,
+  Recommendation,
+  RecommendedMap,
+  Recommendations,
   Replay,
   ReplayCharts,
   ReplayDetail,
@@ -52,6 +64,11 @@ const NOTE = { idx: 1, time_ms: 1, result: 1, error_ms: 1, aim_error_px: 1, x: 1
   pattern: 1 } satisfies Record<keyof ChartNote, 1>
 const DETAIL = { replay: 1, beatmap: 1, status: 1, judged: 1, matches_official: 1,
   by_pattern: 1 } satisfies Record<keyof ReplayDetail, 1>
+const RECS = { player_id: 1, target_skill: 1, comfort_stars: 1, created_at: 1,
+  maps: 1 } satisfies Record<keyof Recommendations, 1>
+const REC = { rank: 1, score: 1, reason: 1, beatmap: 1 } satisfies Record<keyof Recommendation, 1>
+const REC_MAP = { id: 1, beatmapset_id: 1, artist: 1, title: 1, version: 1, creator: 1,
+  star_rating: 1, bpm: 1, ar: 1, od: 1, hit_length_s: 1 } satisfies Record<keyof RecommendedMap, 1>
 const SKILLS = { player_id: 1, aim: 1, speed: 1, accuracy: 1, consistency: 1, stamina: 1,
   reading: 1, strongest: 1, weakest: 1, plays_used: 1, plays_skipped: 1,
   computed_at: 1 } satisfies Record<keyof Skills, 1>
@@ -148,6 +165,34 @@ describe.skipIf(!apiUp)('through the dev server, against the real API', () => {
     for (const name of names) expect(skills[name]).toBeGreaterThanOrEqual(0)
     expect(names).toContain(skills.strongest)
     expect(names).toContain(skills.weakest)
+  }, 90_000)
+
+  test("a player's practice maps have exactly the fields src/types.ts declares", async () => {
+    // peppy is synced above; the practice maps follow the scoring.
+    const { player } = await getPlayer('peppy')
+    // Not picked yet is a 409, or (for a player scored before they existed) none made.
+    let recs: Recommendations | undefined
+    for (let tries = 0; recs === undefined; tries++) {
+      try {
+        const answer = await getRecommendations(player.osu_id)
+        if (answer.target_skill !== null) recs = answer
+      } catch (e) {
+        if (!(e instanceof ApiError && e.status === 409)) throw e
+      }
+      if (recs === undefined) {
+        if (tries >= 60) throw new Error("peppy's practice maps were never picked")
+        await new Promise((r) => setTimeout(r, 1000))
+      }
+    }
+
+    expect(fields(recs)).toEqual(expected(RECS))
+    expect(recs.player_id).toBe(player.osu_id)
+    expect(recs.maps.length).toBeGreaterThan(0)
+    for (const rec of recs.maps) {
+      expect(fields(rec)).toEqual(expected(REC))
+      expect(fields(rec.beatmap)).toEqual(expected(REC_MAP))
+    }
+    expect(recs.maps.map((m) => m.rank)).toEqual(recs.maps.map((_, i) => i + 1))
   }, 90_000)
 
   test("an unknown player's skills are the API's 404, with its reason", async () => {

@@ -35,6 +35,12 @@ export function formatStars(stars: number): string {
   return `${stars.toFixed(2)}★`
 }
 
+/** Seconds of play -> "4:05" (minutes:seconds; hours stay as minutes, "75:00") */
+export function formatLength(seconds: number): string {
+  const s = Math.max(0, Math.round(seconds))
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`
+}
+
 /** An ISO date -> "Apr 28, 2026", in the reader's time zone */
 export function formatDate(iso: string): string {
   return new Date(iso).toLocaleDateString('en-US', {

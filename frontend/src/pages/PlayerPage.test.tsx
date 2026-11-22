@@ -6,7 +6,7 @@ import { MemoryRouter } from 'react-router'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 
 import App from '../App'
-import { playerResponse, skills } from '../test/fixtures'
+import { playerResponse, recommendations, skills } from '../test/fixtures'
 
 // Requests waiting for an answer, by URL; answer() settles them.
 let waiting: { url: string; reply: (r: Response) => void; fail: (e: unknown) => void }[]
@@ -83,13 +83,16 @@ test('the profile', async () => {
   expect(name).toHaveAttribute('href', 'https://osu.ppy.sh/users/2')
 })
 
-test("the player's skills are asked for by their osu! id, once the profile is in", async () => {
+test("the player's skills and practice maps are asked for by their osu! id, once the profile is in", async () => {
   at('/players/peppy')
   expect(waiting.map((w) => w.url)).toEqual([PEPPY]) // not before: the id isn't known yet
 
   await answer(PEPPY, Response.json(playerResponse({ osu_id: 7562902 })))
 
-  expect(waiting.map((w) => w.url)).toEqual(['/api/players/7562902/skills'])
+  expect(waiting.map((w) => w.url)).toEqual([
+    '/api/players/7562902/skills',
+    '/api/players/7562902/recommendations',
+  ])
 })
 
 test('the skills show under the profile, above the plays', async () => {
@@ -116,6 +119,36 @@ test("the skills failing doesn't hide the profile or the plays", async () => {
   expect(screen.getByRole('region', { name: 'Profile' })).toHaveTextContent('peppy')
   expect(screen.getAllByRole('table')).toHaveLength(2)
   expect(screen.queryByRole('alert')).toBeNull() // the page itself didn't fail
+})
+
+test('the practice maps show under the skills, above the plays', async () => {
+  at('/players/peppy')
+  await answer(PEPPY, Response.json(playerResponse()))
+  await answer('/api/players/2/skills', Response.json(skills()))
+  await answer('/api/players/2/recommendations', Response.json(recommendations()))
+
+  const skillsPanel = screen.getByRole('region', { name: 'Skills' })
+  const practice = screen.getByRole('region', { name: 'Practice maps' })
+  const [top] = screen.getAllByRole('table')
+  const before = (a: Element, b: Element) => (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0
+  expect(before(skillsPanel, practice)).toBe(true)
+  expect(before(practice, top)).toBe(true)
+  expect(practice).toHaveTextContent('Practice maps for Reading')
+})
+
+test("the practice maps failing doesn't hide the rest", async () => {
+  at('/players/peppy')
+  await answer(PEPPY, Response.json(playerResponse()))
+  await answer('/api/players/2/skills', Response.json(skills()))
+  await answer('/api/players/2/recommendations', Response.json({ detail: 'boom' }, { status: 500 }))
+
+  expect(screen.getByRole('region', { name: 'Practice maps' })).toHaveTextContent(
+    "The practice maps couldn't be loaded.",
+  )
+  expect(screen.getByRole('region', { name: 'Skills' })).toHaveTextContent('Strongest: Consistency')
+  expect(screen.getByRole('region', { name: 'Profile' })).toHaveTextContent('peppy')
+  expect(screen.getAllByRole('table')).toHaveLength(2)
+  expect(screen.queryByRole('alert')).toBeNull()
 })
 
 test('an inactive player is unranked', async () => {
