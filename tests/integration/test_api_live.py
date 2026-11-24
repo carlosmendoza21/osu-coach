@@ -120,12 +120,38 @@ def test_unknown_players_recommendations_are_404(api: httpx.Client) -> None:
     assert resp.status_code == 404
 
 
+def test_a_players_report(api: httpx.Client) -> None:
+    api.get("/players/peppy")  # synced, scored and recommended (see the tests above)
+    deadline = time.monotonic() + TIMEOUT_S
+    while (resp := api.post("/players/2/report")).status_code == 409:
+        assert time.monotonic() < deadline, "peppy's skills were never scored"
+        time.sleep(1)
+    skills = api.get("/players/2/skills").json()
+    recs = api.get("/players/2/recommendations").json()
+
+    assert resp.status_code == 200
+    report = resp.json()
+    assert report["source"] == "template"
+    # It agrees with the other endpoints: the same weakest skill, scores and maps.
+    names = ("aim", "speed", "accuracy", "consistency", "stamina", "reading")
+    assert report["weaknesses"][0]["skill"] == skills["weakest"]
+    assert report["strengths"][0]["skill"] == skills["strongest"]
+    for n in report["strengths"] + report["weaknesses"]:
+        assert n["score"] == skills[n["skill"]]
+        assert n["skill"] in names
+        # Every piece of evidence quotes a number.
+        assert n["evidence"] and all(any(c.isdigit() for c in e) for e in n["evidence"])
+    assert [m["beatmap_id"] for m in report["maps"]] == [m["beatmap"]["id"] for m in recs["maps"]]
+    assert len(report["plan"]) == 3
+
+
 def test_endpoint_is_documented(api: httpx.Client) -> None:
     paths = api.get("/openapi.json").json()["paths"]
 
     assert "/players/{username}" in paths
     assert "/players/{osu_id}/skills" in paths
     assert "/players/{osu_id}/recommendations" in paths
+    assert "post" in paths["/players/{osu_id}/report"]
 
 
 # ---------- Uploading a replay ----------
