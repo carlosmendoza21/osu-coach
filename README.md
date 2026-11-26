@@ -42,9 +42,13 @@ docker compose up --build
 - `POST /players/{osu_id}/report`: a coaching report: a summary, the 2 strongest skills
   and the 3 weakest (weakest first), each with evidence from the player's plays and
   uploaded replays (matched by name), a practice plan, and the practice maps with their
-  reasons. Built from templates for now (`"source": "template"`), so every number is
-  one from the database; an LLM will write the same structure later. `409` before the
-  player is scored, `404` for an unknown player
+  reasons. Code decides every fact (which skills, their order, every number, the
+  maps). With `COACH_LLM` set, a model writes the words (summary, explanations, plan)
+  after looking things up through four tools, and every number it writes must be one
+  of the facts; otherwise, or if it fails, the template report is sent with
+  `fallback_reason` saying why. `"source"` says which (`"llm"` or `"template"`), `model`
+  who wrote it and `tools_used` what it looked up. `409` before the player is scored,
+  `404` for an unknown player
 - Two Celery workers: `sync-worker` runs only player syncs (the `sync` queue), so a player
   search never waits behind background work; `worker` runs the rest (map downloads,
   attributes, replay analysis)
@@ -70,6 +74,17 @@ docker compose up -d postgres redis
 uv run alembic upgrade head
 uv run uvicorn osu_coach.main:app --reload
 ```
+
+The coach's LLM (optional; without it, reports come from templates). To run one locally
+for free with [Ollama](https://ollama.com), pull a model and name it in `.env`:
+
+```bash
+ollama pull qwen3:8b
+```
+
+Then set `COACH_LLM=ollama:qwen3:8b` in `.env` and restart the API (`docker compose up -d
+api`); in Docker it reaches Ollama on your machine at `host.docker.internal`. On a laptop
+CPU a report takes 2-4 minutes.
 
 New migration after changing `src/osu_coach/models.py`:
 
@@ -121,7 +136,7 @@ every push.
 On Windows, async database code needs a selector event loop (psycopg can't use the
 default one); `tests/conftest.py` sets it for the tests, and the worker task sets it too.
 
-**Unit tests** ([`tests/unit/`](tests/unit), 1145 tests): call the code directly with nothing
+**Unit tests** ([`tests/unit/`](tests/unit), 1212 tests): call the code directly with nothing
 running. `respx` fakes the osu! token endpoint (and blocks any unmocked request),
 `fakeredis` stands in for Redis, and the rate limiter gets a fake clock, so a 60 s window
 runs instantly.
@@ -405,6 +420,37 @@ would bring back the wait this avoids).
   is full, the last page or 3 pages ending it, a set on two pages picked once, and pages
   with nothing in the band read past
 
+*LLM client* (28), with Ollama faked by `respx`:
+- Requests: no streaming and no thinking (slow on a CPU), tools sent as functions (a
+  tool without arguments still with a schema), a schema sent as the format, the URL with
+  or without a trailing slash, and the provider and model as its name
+- Replies: text, tool calls (with or without arguments) kept for the conversation, and
+  no content read as empty text
+- Errors: a `404` (model not pulled), a `500`, an answer that isn't JSON, without a
+  message, with a broken tool call or a message that isn't an object, no server, and a
+  timeout are all `LLMError`, which the coach falls back on (two of these first crashed
+  instead: the tests found them)
+- The `COACH_LLM` setting: `ollama:qwen3:8b` (the model's own `:` kept, spaces
+  trimmed), nothing for an empty one, and a clear refusal for an unknown provider or a
+  missing model
+
+*LLM coaching report* (39), with a fake model that replays scripted answers:
+- The four tools, by the brief's names: the skill profile with every skill's evidence,
+  the replays (raw UR, notes per pattern), misses by pattern worst first, the practice
+  maps; without replays or maps they say so; an unknown tool is an answer, not a crash
+- The number check: facts include the evidence's numbers and every tool's raw values
+  (a UR of 85.25 may be written 85.3); counts up to 10 written whole are fine; a decimal
+  ("AR 8.0") must be a fact; 0.05 of rounding allowed and no more; a thousands comma
+  read as one number; every part of the words checked
+- Merging: the facts stay code's (the weaknesses, their order, scores, evidence,
+  strengths and maps) and only the words are the model's, whatever order it wrote them
+  in; a weakness left out, or a number not in the facts, is refused
+- The loop: what the model is asked (the rules, every tool, the tools' answers sent
+  back, then the schema with the weaknesses as code ranked them), stopping after 4
+  rounds of lookups, a model that writes at once, and the tools used recorded. An
+  unreachable model, a failure while writing, an answer that isn't JSON or misses
+  parts, a made-up number, or no plan each give the template report with the reason
+
 *Coaching report* (29), on hand-made plays and replay numbers:
 - Evidence from plays, one sentence set per skill with its numbers: the hardest-aim and
   fastest passes, average and best accuracy and the highest OD, combo held (capped at
@@ -496,7 +542,7 @@ statements are compiled to Postgres SQL:
 - The response has exactly the profile's fields, with the time in UTC; a username, a
   decimal or no id at all isn't an osu! id (`422`, `404`); the endpoint is documented
 
-**Integration tests** ([`tests/integration/`](tests/integration), 272 tests): use real
+**Integration tests** ([`tests/integration/`](tests/integration), 276 tests): use real
 Redis, real time, real processes, and the real osu! API with the credentials in `.env`.
 They skip with the reason if Redis isn't running (`docker compose up -d redis`) or the
 credentials are missing, and clean up their Redis keys even if a check fails.
@@ -721,14 +767,22 @@ maps written in by hand:
   skill and comfort level; `404` for an unknown player, `409` before scoring, `422` for
   a non-number, and an empty list for a player scored before recommendations existed
 
-*Coaching facts and report* (12, Postgres; also run in CI): a player's replays matched by
+*Coaching facts and report* (15, Postgres; also run in CI): a player's replays matched by
 name in any letter case, only analyzed ones, not someone else's: their count, mean UR,
 notes per pattern and miss rate per pattern from the stored results; none without
 replays; no UR when none was measured. A player's facts: their username, scores, plays
 (with their maps' attributes), replays and practice maps in rank order with names and
 reasons; none for an unscored or unknown player; no maps when none are stored. The
 endpoint sends the template report as built; `404` for an unknown player, `409` before
-scoring, `422` for a non-number, `405` for a GET.
+scoring, `422` for a non-number, `405` for a GET. With a (fake) model, the endpoint sends
+its words over code's facts; a model that fails gives the template with the reason; and
+no model is asked for an unscored player. The tests always set the model themselves, so
+a `COACH_LLM` in a developer's `.env` can't reach them.
+
+*A real model* (1, needs Ollama with the model pulled; skips with the reason otherwise,
+as in CI): `qwen3:8b` (or `OLLAMA_TEST_MODEL`) writes a report on hand-written facts in
+about 3 minutes on a laptop CPU: the facts are code's, and either every number in its
+words is a fact or it fell back to the template saying why.
 
 *Worker* (14, the full stack running): `fetch_beatmap` stores map 22423's 254 objects and
 its pattern vector (the one worked out from the file in the unit tests), and refuses a
@@ -1059,6 +1113,16 @@ Both suites were checked against deliberately broken code:
   worst first, weaknesses not weakest first, the maps step with no maps, later steps
   pointing at the maps, replays left out of the summary, called an LLM report, and the
   `404` and `409` swapped
+- The LLM report (26 breaks): in the client, thinking left on, streamed answers, tools or
+  the schema never sent, odd answers not caught, no arguments left as None, a trailing
+  slash kept, an empty setting not empty, the model split at the wrong colon, tool
+  results sent as user messages; in the check, counts up to 100 or decimals exempt, a
+  loose tolerance, the evidence or the tools' numbers not facts, numbers never checked;
+  in the loop, missing weaknesses allowed, the model's order kept, one lookup round
+  only, tool answers or tool names not kept, an unreachable model or a broken answer
+  crashing, any skill name allowed, an unknown tool crashing, and the model never used.
+  One first got through (the tools' numbers were tested only in `merge`, not in the
+  whole loop); a test for it was added
 
 `.gitattributes` marks `.osu` files as binary: git's `\r\n` to `\n` conversion would change
 a map file's MD5 and break the fixtures on other machines.
@@ -1108,7 +1172,9 @@ src/osu_coach/
                collect_candidates
   candidates.py  well-known ranked maps in each star band, for the recommender
   recommender.py  practice maps for a player's weakest skill, with reasons
-  coach.py     a coaching report from a player's facts (templates; an LLM later)
+  coach.py     a coaching report from a player's facts (the template report)
+  coach_llm.py the report's words by an LLM: tools, the number check, the fallback
+  llm.py       a small interface to chat models; Ollama (local, free) behind it
 migrations/    Alembic
 frontend/      React + TypeScript (Vite): src/api.ts calls the API, src/types.ts its responses,
                src/pages/ the pages (home, player, upload, replay), src/components/ the

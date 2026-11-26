@@ -21,6 +21,13 @@ class Settings(BaseSettings):
     osu_client_id: str = ""
     osu_client_secret: SecretStr = SecretStr("")
 
+    # The coach's LLM, as "provider:model" (e.g. "ollama:qwen3:8b"). Empty: reports come
+    # from templates only, with no outside service involved.
+    coach_llm: str = ""
+    # Where a local Ollama server answers. In Docker, the host machine's is
+    # host.docker.internal (docker-compose.yml sets that).
+    ollama_url: str = "http://localhost:11434"
+
 
 @lru_cache
 def get_settings() -> Settings:

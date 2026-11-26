@@ -47,6 +47,7 @@ class SkillNote(BaseModel):
     skill: str
     score: float  # 0-100, from the skill profile
     evidence: list[str]  # sentences with real numbers
+    explanation: str | None = None  # the LLM's words on it (None in a template report)
 
 
 class PlanStep(BaseModel):
@@ -70,6 +71,10 @@ class Report(BaseModel):
     weaknesses: list[SkillNote]  # weakest first
     plan: list[PlanStep]
     maps: list[ReportMap]
+    model: str | None = None  # who wrote the words, e.g. "ollama:qwen3:8b"
+    tools_used: list[str] = []  # the tools the model called, in order
+    # Why a model's report wasn't used (a template report sent instead), if one was tried.
+    fallback_reason: str | None = None
 
 
 # ---------- Facts ----------

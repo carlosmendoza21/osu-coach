@@ -7,6 +7,7 @@ Needs:     Postgres (docker compose up -d postgres). Skips with the reason if it
            Uses a separate `<db>_test` database (see conftest.py).
 """
 
+import json
 from collections.abc import AsyncIterator, Iterator
 from typing import Any
 
@@ -22,8 +23,10 @@ from sqlalchemy.ext.asyncio import (
 )
 from sqlalchemy.pool import NullPool
 
+from osu_coach.api.coach import get_llm
 from osu_coach.coach import gather_facts, replay_facts, template_report
 from osu_coach.db import get_session
+from osu_coach.llm import LLMClient, LLMError, Message, Reply, Tool
 from osu_coach.main import create_app
 from tests.support import ALL_TABLES
 
@@ -216,7 +219,11 @@ async def test_a_player_without_practice_maps(engine: Engine, session: AsyncSess
 # ---------- POST /players/{osu_id}/report ----------
 
 
-async def call(db: AsyncEngine, method: str, path: str) -> httpx.Response:
+async def call(
+    db: AsyncEngine, method: str, path: str, llm: LLMClient | None = None
+) -> httpx.Response:
+    """A request to the app over this database. The model is always set here (none by
+    default): a COACH_LLM in a developer's .env must not reach these tests."""
     app = create_app()
 
     async def session() -> AsyncIterator[AsyncSession]:
@@ -224,6 +231,7 @@ async def call(db: AsyncEngine, method: str, path: str) -> httpx.Response:
             yield s
 
     app.dependency_overrides[get_session] = session
+    app.dependency_overrides[get_llm] = lambda: llm
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         return await client.request(method, path)
@@ -261,3 +269,69 @@ async def test_the_reports_errors(
     assert resp.status_code == status
     if detail:
         assert resp.json()["detail"] == detail
+
+
+# ---------- With a model (a fake one) ----------
+
+
+class FakeModel:
+    """Writes at once: words for whatever weaknesses it's asked about, with no numbers.
+    Or fails, if given an error."""
+
+    name = "fake:model"
+
+    def __init__(self, error: Exception | None = None) -> None:
+        self.error = error
+
+    async def chat(self, messages: list[Message], tools: list[Tool] | None = None,
+                   schema: dict[str, Any] | None = None) -> Reply:  # fmt: skip
+        if self.error:
+            raise self.error
+        if schema is None:
+            return Reply("Ready.", [], {"role": "assistant", "content": "Ready."})
+        skills = schema["properties"]["weaknesses"]["items"]["properties"]["skill"]["enum"]
+        words = {
+            "summary": "Keep it up.",
+            "weaknesses": [{"skill": s, "explanation": f"Work on {s}."} for s in skills],
+            "plan": [{"skill": s, "text": f"Practise {s}."} for s in skills],
+        }
+        return Reply(json.dumps(words), [], {"role": "assistant", "content": json.dumps(words)})
+
+
+async def test_the_report_written_by_a_model(db: AsyncEngine) -> None:
+    resp = await call(db, "POST", "/players/2/report", llm=FakeModel())
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert (body["source"], body["model"], body["fallback_reason"]) == ("llm", "fake:model", None)
+    assert body["summary"] == "Keep it up."
+    # The facts are still code's: the weaknesses in order, with their scores and maps.
+    assert [(w["skill"], w["score"], w["explanation"]) for w in body["weaknesses"]] == [
+        ("consistency", 30.0, "Work on consistency."),
+        ("speed", 40.0, "Work on speed."),
+        ("stamina", 55.0, "Work on stamina."),
+    ]
+    assert [m["beatmap_id"] for m in body["maps"]] == [11, 10]
+
+
+async def test_a_model_that_fails_gives_the_template(
+    db: AsyncEngine, session: AsyncSession
+) -> None:
+    resp = await call(db, "POST", "/players/2/report", llm=FakeModel(LLMError("ConnectError")))
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["source"] == "template"
+    assert body["fallback_reason"] == "the model couldn't be reached (ConnectError)"
+    facts = await gather_facts(session, 2)
+    assert facts is not None
+    assert body["summary"] == template_report(facts).summary
+
+
+async def test_no_model_is_asked_for_an_unscored_player(db: AsyncEngine) -> None:
+    # A 409 before any model call: a model that would fail must not turn it into a 200.
+    resp = await call(
+        db, "POST", "/players/3/report", llm=FakeModel(LLMError("must not be called"))
+    )
+
+    assert resp.status_code == 409
