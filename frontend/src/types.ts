@@ -172,3 +172,43 @@ export interface Recommendations {
   created_at: string | null // ISO time
   maps: Recommendation[] // best first; empty until made (or if none fit)
 }
+
+// POST /players/{osu_id}/report
+export interface SkillNote {
+  skill: SkillName
+  score: number // 0-100
+  evidence: string[] // sentences with real numbers
+  explanation: string | null // the model's words on it; null in a template report
+}
+
+export interface PlanStep {
+  skill: SkillName
+  text: string
+}
+
+export interface ReportMap {
+  beatmap_id: number
+  name: string // "Artist - Title [Difficulty]"
+  star_rating: number
+  reason: string
+}
+
+export interface CoachReport {
+  player_id: number
+  username: string
+  source: 'template' | 'llm' // who wrote the words
+  summary: string
+  strengths: SkillNote[]
+  weaknesses: SkillNote[] // weakest first
+  plan: PlanStep[]
+  maps: ReportMap[]
+  model: string | null // e.g. "ollama:qwen3:8b"; null when no model was tried
+  tools_used: string[]
+  fallback_reason: string | null // why a model's words weren't used
+}
+
+// The report as a stream (server-sent events): steps while the coach works, then the report.
+export type CoachEvent =
+  | { type: 'step'; text: string }
+  | { type: 'report'; report: CoachReport }
+  | { type: 'error'; detail: string }

@@ -1,6 +1,7 @@
 // Sample API data for tests, shaped like the real responses (src/types.ts).
 import type {
   ChartNote,
+  CoachReport,
   PlayerResponse,
   Recommendation,
   Recommendations,
@@ -206,6 +207,39 @@ export function recommendations(changes: Partial<Recommendations> = {}): Recomme
     comfort_stars: 3.68,
     created_at: '2026-11-21T05:25:20Z',
     maps: [1, 2, 3].map((rank) => recommendation(rank)),
+    ...changes,
+  }
+}
+
+export function coachReport(changes: Partial<CoachReport> = {}): CoachReport {
+  return {
+    player_id: 2,
+    username: 'peppy',
+    source: 'llm',
+    summary: "You're strong in consistency; reading is where to work.",
+    strengths: [
+      { skill: 'consistency', score: 80.9, evidence: ['30 of your 50 plays have no misses.'], explanation: null },
+      { skill: 'accuracy', score: 69.4, evidence: ['The highest OD you have passed is 8.0.'], explanation: null },
+    ],
+    weaknesses: [
+      {
+        skill: 'reading',
+        score: 8,
+        evidence: ["The highest AR you've passed is 9.0; your plays average AR 6.7.", '0 of your 50 plays use Hidden.'],
+        explanation: 'You rarely see high approach rates.',
+      },
+      { skill: 'speed', score: 32.9, evidence: ['Your 10 fastest passes average 1.79 speed difficulty.'], explanation: 'Streams slow you down.' },
+      { skill: 'stamina', score: 38.3, evidence: ['The most hard-to-tap notes you cleared is 223.'], explanation: 'Long maps tire you.' },
+    ],
+    plan: [
+      { skill: 'reading', text: 'Play the practice maps below for their high approach rates.' },
+      { skill: 'speed', text: 'Then speed: pick stream maps a little above your level.' },
+      { skill: 'stamina', text: 'Then stamina: hold your tapping to the end of long streams.' },
+    ],
+    maps: [{ beatmap_id: 1001, name: 'Artist - Title [Insane]', star_rating: 4.05, reason: 'AR 8.5; 4.0★' }],
+    model: 'ollama:qwen3:8b',
+    tools_used: ['get_skill_profile'],
+    fallback_reason: null,
     ...changes,
   }
 }

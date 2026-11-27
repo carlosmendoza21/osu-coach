@@ -1,5 +1,14 @@
 // Calls to the backend. In development Vite forwards /api/... to it (vite.config.ts).
-import type { PlayerResponse, Recommendations, ReplayCharts, ReplayDetail, Skills, UploadResponse } from './types'
+import { takeEvents } from './sse'
+import type {
+  CoachEvent,
+  PlayerResponse,
+  Recommendations,
+  ReplayCharts,
+  ReplayDetail,
+  Skills,
+  UploadResponse,
+} from './types'
 
 export const API_BASE = '/api'
 
@@ -71,4 +80,34 @@ export function uploadReplay(file: File): Promise<UploadResponse> {
   const form = new FormData()
   form.append('file', file) // the field name the API expects
   return request('/replays/upload', { method: 'POST', body: form })
+}
+
+/** Ask the coach for a player's report and hear it work: each event (steps, then the
+ * report) is passed to `onEvent` as it arrives. Resolves when the stream ends; an
+ * error status (404, 409...) is an ApiError, as for every call. `signal` cancels it. */
+export async function streamReport(
+  osuId: number,
+  onEvent: (event: CoachEvent) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  const response = await fetch(`${API_BASE}/players/${osuId}/report`, {
+    method: 'POST',
+    headers: { Accept: 'text/event-stream' },
+    signal,
+  })
+  if (!response.ok) {
+    throw new ApiError(response.status, await reason(response))
+  }
+  if (!response.body) throw new ApiError(response.status, 'the report came back empty')
+  const reader = response.body.pipeThrough(new TextDecoderStream()).getReader()
+  let buffer = ''
+  for (;;) {
+    const { done, value } = await reader.read()
+    if (done) break
+    const { events, rest } = takeEvents(buffer + value)
+    buffer = rest
+    events.forEach(onEvent)
+  }
+  // A last event without its blank line (the stream simply ended).
+  takeEvents(buffer + '\n\n').events.forEach(onEvent)
 }

@@ -48,7 +48,10 @@ docker compose up --build
   of the facts; otherwise, or if it fails, the template report is sent with
   `fallback_reason` saying why. `"source"` says which (`"llm"` or `"template"`), `model`
   who wrote it and `tools_used` what it looked up. `409` before the player is scored,
-  `404` for an unknown player
+  `404` for an unknown player. Asked for with `Accept: text/event-stream`, it streams
+  instead (server-sent events): a `step` event for each thing the coach does ("Looking
+  up your skills"), then the `report` (or an `error`), so a page can show a report that
+  takes minutes being written
 - Two Celery workers: `sync-worker` runs only player syncs (the `sync` queue), so a player
   search never waits behind background work; `worker` runs the rest (map downloads,
   attributes, replay analysis)
@@ -103,7 +106,9 @@ npm install
 npm run dev
 ```
 
-Pages: `/players/{name}` (a profile and its plays), `/replays/new` (upload an `.osr`), and
+Pages: `/players/{name}` (a profile: the skills radar, a "Coach me" button that shows the
+coach working step by step and then its report, the practice maps, and the plays),
+`/replays/new` (upload an `.osr`), and
 `/replays/{id}` (a replay's analysis: counts against osu!'s, UR, timing, aim, results by
 pattern, then three charts: hit timing over the 300/100/50 windows, UR over the map with
 each miss marked, and where the cursor was, with misses, 50s and 100s marked; it checks
@@ -136,7 +141,7 @@ every push.
 On Windows, async database code needs a selector event loop (psycopg can't use the
 default one); `tests/conftest.py` sets it for the tests, and the worker task sets it too.
 
-**Unit tests** ([`tests/unit/`](tests/unit), 1212 tests): call the code directly with nothing
+**Unit tests** ([`tests/unit/`](tests/unit), 1217 tests): call the code directly with nothing
 running. `respx` fakes the osu! token endpoint (and blocks any unmocked request),
 `fakeredis` stands in for Redis, and the rate limiter gets a fake clock, so a 60 s window
 runs instantly.
@@ -434,7 +439,7 @@ would bring back the wait this avoids).
   trimmed), nothing for an empty one, and a clear refusal for an unknown provider or a
   missing model
 
-*LLM coaching report* (39), with a fake model that replays scripted answers:
+*LLM coaching report* (44), with a fake model that replays scripted answers:
 - The four tools, by the brief's names: the skill profile with every skill's evidence,
   the replays (raw UR, notes per pattern), misses by pattern worst first, the practice
   maps; without replays or maps they say so; an unknown tool is an answer, not a crash
@@ -450,6 +455,9 @@ would bring back the wait this avoids).
   rounds of lookups, a model that writes at once, and the tools used recorded. An
   unreachable model, a failure while writing, an answer that isn't JSON or misses
   parts, a made-up number, or no plan each give the template report with the reason
+- Steps, for the page: "Reading your profile", one for each lookup (every tool has one;
+  an unknown tool still gets "Looking up ..."), "Writing your report", in order; a
+  failure stops them; and they're optional
 
 *Coaching report* (29), on hand-made plays and replay numbers:
 - Evidence from plays, one sentence set per skill with its numbers: the hardest-aim and
@@ -542,7 +550,7 @@ statements are compiled to Postgres SQL:
 - The response has exactly the profile's fields, with the time in UTC; a username, a
   decimal or no id at all isn't an osu! id (`422`, `404`); the endpoint is documented
 
-**Integration tests** ([`tests/integration/`](tests/integration), 276 tests): use real
+**Integration tests** ([`tests/integration/`](tests/integration), 283 tests): use real
 Redis, real time, real processes, and the real osu! API with the credentials in `.env`.
 They skip with the reason if Redis isn't running (`docker compose up -d redis`) or the
 credentials are missing, and clean up their Redis keys even if a check fails.
@@ -767,7 +775,7 @@ maps written in by hand:
   skill and comfort level; `404` for an unknown player, `409` before scoring, `422` for
   a non-number, and an empty list for a player scored before recommendations existed
 
-*Coaching facts and report* (15, Postgres; also run in CI): a player's replays matched by
+*Coaching facts and report* (22, Postgres; also run in CI): a player's replays matched by
 name in any letter case, only analyzed ones, not someone else's: their count, mean UR,
 notes per pattern and miss rate per pattern from the stored results; none without
 replays; no UR when none was measured. A player's facts: their username, scores, plays
@@ -777,7 +785,12 @@ endpoint sends the template report as built; `404` for an unknown player, `409` 
 scoring, `422` for a non-number, `405` for a GET. With a (fake) model, the endpoint sends
 its words over code's facts; a model that fails gives the template with the reason; and
 no model is asked for an unscored player. The tests always set the model themselves, so
-a `COACH_LLM` in a developer's `.env` can't reach them.
+a `COACH_LLM` in a developer's `.env` can't reach them. As a stream: a template report
+is one `report` event, uncached and unbuffered (`no-cache`, `X-Accel-Buffering: no`);
+a model's steps come first, in order, and the report last; a model that fails still
+streams the template with the reason; an unexpected failure is an `error` event rather
+than a cut-off; a `404` or `409` is known before streaming, so it's a plain JSON error;
+and without asking for a stream, it's JSON as before.
 
 *A real model* (1, needs Ollama with the model pulled; skips with the reason otherwise,
 as in CI): `qwen3:8b` (or `OLLAMA_TEST_MODEL`) writes a report on hand-written facts in
@@ -803,7 +816,7 @@ recommendations are made. It writes to the dev database, like the app.
 
 **Frontend tests** ([`frontend/`](frontend), Vitest; also run in CI):
 
-*Unit* (302, `npm test`), with `fetch` replaced:
+*Unit* (346, `npm test`), with `fetch` replaced:
 - `api.ts`: each call's URL, under the proxied `/api`, with player names escaped (a space,
   a slash or a `?` can't break the path); an upload posts the file as the `file` form
   field, without a hand-set Content-Type (the browser adds multipart's boundary); the JSON
@@ -856,6 +869,24 @@ recommendations are made. It writes to the dev database, like the app.
   nothing fitting has its own message; a `404`, a `500` or no answer each explained
 - `formatLength`: minutes and padded seconds (`2:05`, `0:59`, `1:00`), over an hour as
   minutes (`75:00`), rounded, never negative
+- The report stream (21): reading events out of text: one, two, half of one kept for
+  the next chunk, a data line still waiting for its blank line, Windows line endings,
+  `data:` with or without a space, several data lines joined, comments and ids ignored,
+  an event without data skipped, and a whole report as sent. `streamReport`: a POST
+  asking for a stream, each event in order, events split anywhere across chunks
+  (a "★" split between two chunks still decoded whole), a last event without its blank
+  line, an empty stream, a `409` or `404` as an `ApiError` with its reason, and the
+  signal passed on so it can be cancelled
+- The Coach panel (22, on fake timers, with a stream the test feeds): before, a button
+  and nothing asked; while it runs, the latest step with the time so far (1:05 after 65
+  s), the earlier steps below, the button off; the report: who wrote it (the model, or
+  templates and why the model's words weren't used), the summary, each weakness in
+  order with its explanation and evidence, the strengths, the plan, and a link to the
+  practice maps (none without maps); asking again replaces the report; a `409`, a `404`,
+  a `500`, no answer, an `error` event and a stream that ends early each explained;
+  leaving cancels the request, asking again cancels the last, and no clock is left
+  ticking. On the page it sits between the skills and the practice maps (which have the
+  id its link goes to), and asks for nothing until the button is pressed
 - Analysis formatting: osu!'s accuracy formula (a 100 a third, a 50 a sixth; 0 objects
   give 0, not NaN; FREEDOM DiVE's counts give osu!'s 99.58%), "1.8 ms early / late / on
   time" (within 0.05 ms), UR and pixels; upload errors (413, 422 with the parser's
@@ -890,14 +921,16 @@ recommendations are made. It writes to the dev database, like the app.
   charts, an error saying only the charts are missing, and a late answer for another
   replay never replacing them
 
-*Live* (8, `npm run test:live`; needs the API running, skips otherwise): a real Vite dev
+*Live* (10, `npm run test:live`; needs the API running, skips otherwise): a real Vite dev
 server is started with `vite.config.ts`, and `api.ts` calls the API through its proxy:
 `/health` answers; an unknown replay is the API's `404` with its reason; an upload reaches
 the parser (so the form field name is right); peppy's profile and plays have exactly the
 fields `types.ts` declares, no more and no fewer, and every play comes with its map;
 peppy's skills (checked until scored) have exactly the declared fields, and an unknown
 player's are the API's `404` with its reason; peppy's practice maps (checked until picked)
-and each map's fields are exactly as declared, ranked 1 onwards; and a
+and each map's fields are exactly as declared, ranked 1 onwards; peppy's coaching report
+streams in (steps, then the report last) with exactly the declared fields, and an
+unknown player's is the API's `404` before any stream; and a
 real replay from `data/replays/` uploads and is checked until analyzed, as the replay page
 does, with its detail's fields (every pattern's too) as declared and our counts matching
 osu!'s; its chart data has the declared fields and exactly the notes and misses its
@@ -1047,6 +1080,13 @@ Both suites were checked against deliberately broken code:
   back, BPM not rounded, no mapper, no reason, the `404` not explained, no comfort
   level, an unordered list, seconds not padded, negative lengths, the wrong URL, and the
   panel missing or above the skills
+- The Coach page and its stream (20 breaks): a partial event dropped, Windows line
+  endings not read, `data:` without a space misread, no `Accept` header, a GET, no
+  signal, each chunk decoded on its own, the last event dropped, the clock never
+  ticking, leaving not cancelling, an early end left running, error events ignored, no
+  fallback reason, no model in the byline, a `409` not explained, the button on while
+  running, earlier steps not listed, a link to nowhere, no coach on the page, and the
+  practice maps without the id its link goes to
 - `charts.py` and its endpoint (13 breaks): song time instead of real time or the rate the
   wrong way, speed mods ignored, HR not flipped or flipped sideways, aim not rounded, the
   join ignoring the map, notes out of map order, the playfield's right edge counted in,
@@ -1123,6 +1163,10 @@ Both suites were checked against deliberately broken code:
   crashing, any skill name allowed, an unknown tool crashing, and the model never used.
   One first got through (the tools' numbers were tested only in `merge`, not in the
   whole loop); a test for it was added
+- The report stream (12 breaks): always or never a stream, no blank line after an event,
+  steps not passed on, no error event, the report never sent, cached or buffered by a
+  proxy, steps left in the queue when the report is done, and no starting, lookup or
+  writing step
 
 `.gitattributes` marks `.osu` files as binary: git's `\r\n` to `\n` conversion would change
 a map file's MD5 and break the fixtures on other machines.

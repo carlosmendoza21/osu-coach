@@ -184,6 +184,52 @@ a {
   }
 }
 
+/* ---------- Coach ---------- */
+
+.coach button {
+  margin-bottom: 0.5rem;
+}
+
+.coach h4 {
+  margin: 1rem 0 0.25rem;
+}
+
+.coach-byline {
+  font-size: 0.85rem;
+  margin: 0.25rem 0;
+}
+
+.coach-summary {
+  font-size: 1.05rem;
+}
+
+.coach-notes,
+.coach-plan {
+  margin: 0;
+  padding-left: 1.5rem;
+}
+
+.coach-notes > li,
+.coach-plan > li {
+  margin-bottom: 0.5rem;
+}
+
+.coach-explanation {
+  margin: 0.15rem 0;
+}
+
+.coach-evidence {
+  color: var(--muted);
+  font-size: 0.9rem;
+  margin: 0.15rem 0 0;
+  padding-left: 1.25rem;
+}
+
+.coach-steps {
+  font-size: 0.9rem;
+  margin: 0;
+}
+
 /* ---------- Practice maps ---------- */
 
 .recommendations h3 .muted {

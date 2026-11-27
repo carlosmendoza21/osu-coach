@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { useParams } from 'react-router'
 
 import { getPlayer } from '../api'
+import CoachPanel from '../components/CoachPanel'
 import RecommendationsPanel from '../components/RecommendationsPanel'
 import ScoreTable from '../components/ScoreTable'
 import SkillsPanel from '../components/SkillsPanel'
@@ -83,6 +84,7 @@ export default function PlayerPage() {
         <p className="muted">Synced from osu! {timeAgo(player.updated_at)}.</p>
       </section>
       <SkillsPanel osuId={player.osu_id} />
+      <CoachPanel key={player.osu_id} osuId={player.osu_id} />
       <RecommendationsPanel osuId={player.osu_id} />
       <ScoreTable scores={best} caption={`Top plays (${best.length})`} />
       <ScoreTable scores={recent} caption={`Recent plays (${recent.length})`} />

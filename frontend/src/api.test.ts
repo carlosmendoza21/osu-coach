@@ -10,8 +10,10 @@ import {
   getRecommendations,
   getReplay,
   getSkills,
+  streamReport,
   uploadReplay,
 } from './api'
+import type { CoachEvent } from './types'
 
 type Call = { url: string; init?: RequestInit }
 let calls: Call[]
@@ -123,5 +125,110 @@ describe('errors', () => {
     answer = () => Response.json({ status: 'ok' }, { status })
 
     await expect(getHealth()).resolves.toEqual({ status: 'ok' })
+  })
+})
+
+// ---------- The coaching report as a stream ----------
+
+/** A response whose body arrives in these chunks, as a stream does. */
+function streamed(chunks: string[], init: ResponseInit = {}): Response {
+  const encoder = new TextEncoder()
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) {
+      for (const chunk of chunks) controller.enqueue(encoder.encode(chunk))
+      controller.close()
+    },
+  })
+  return new Response(body, { headers: { 'Content-Type': 'text/event-stream' }, ...init })
+}
+
+const STEP = 'data: {"type": "step", "text": "Looking up your skills"}\n\n'
+const REPORT = 'data: {"type": "report", "report": {"username": "peppy"}}\n\n'
+
+async function collect(osuId = 2, signal?: AbortSignal): Promise<CoachEvent[]> {
+  const events: CoachEvent[] = []
+  await streamReport(osuId, (e) => events.push(e), signal)
+  return events
+}
+
+describe('streamReport', () => {
+  test('a POST that asks for a stream', async () => {
+    answer = () => streamed([REPORT])
+
+    await collect(7562902)
+
+    expect(calls[0].url).toBe('/api/players/7562902/report')
+    expect(calls[0].init?.method).toBe('POST')
+    expect(calls[0].init?.headers).toEqual({ Accept: 'text/event-stream' })
+  })
+
+  test('each event, in order', async () => {
+    answer = () => streamed([STEP, REPORT])
+
+    expect(await collect()).toEqual([
+      { type: 'step', text: 'Looking up your skills' },
+      { type: 'report', report: { username: 'peppy' } },
+    ])
+  })
+
+  test('events split across chunks come through whole', async () => {
+    // Edge: the network splits the stream anywhere, even mid-event and mid-character.
+    const all = STEP + REPORT
+    answer = () => streamed([all.slice(0, 7), all.slice(7, 60), all.slice(60, 61), all.slice(61)])
+
+    expect((await collect()).map((e) => e.type)).toEqual(['step', 'report'])
+  })
+
+  test('a character split between chunks is decoded whole', async () => {
+    // "★" is three bytes: a chunk boundary inside it must not garble it.
+    const event = 'data: {"type": "step", "text": "5.1★"}\n\n'
+    const bytes = new TextEncoder().encode(event)
+    const at = event.indexOf('★') + 1 // in the middle of its bytes
+    answer = () => {
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(bytes.slice(0, at))
+          controller.enqueue(bytes.slice(at))
+          controller.close()
+        },
+      })
+      return new Response(body)
+    }
+
+    expect(await collect()).toEqual([{ type: 'step', text: '5.1★' }])
+  })
+
+  test('a last event without its blank line still counts', async () => {
+    answer = () => streamed([STEP, 'data: {"type": "report", "report": {}}'])
+
+    expect((await collect()).map((e) => e.type)).toEqual(['step', 'report'])
+  })
+
+  test('an empty stream has no events', async () => {
+    answer = () => streamed([])
+
+    expect(await collect()).toEqual([])
+  })
+
+  test.each([
+    [409, "this player's skills aren't scored yet"],
+    [404, 'player 2 not found'],
+  ])('a %i before the stream is an ApiError with its reason', async (status, detail) => {
+    answer = () => Response.json({ detail }, { status })
+
+    const error = await collect().catch((e: unknown) => e)
+
+    expect(error).toBeInstanceOf(ApiError)
+    expect((error as ApiError).status).toBe(status)
+    expect((error as ApiError).message).toBe(detail)
+  })
+
+  test('the signal is passed on, so the request can be cancelled', async () => {
+    answer = () => streamed([REPORT])
+    const controller = new AbortController()
+
+    await collect(2, controller.signal)
+
+    expect(calls[0].init?.signal).toBe(controller.signal)
   })
 })

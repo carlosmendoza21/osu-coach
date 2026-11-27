@@ -12,7 +12,10 @@ import pytest
 from osu_coach.coach import CoachFacts, ReplayFacts, ReportMap, template_report
 from osu_coach.coach_llm import (
     MAX_TOOL_ROUNDS,
+    STARTING,
+    TOOL_STEPS,
     TOOLS,
+    WRITING,
     Rejected,
     Written,
     fact_numbers,
@@ -402,3 +405,57 @@ async def test_a_fallback_says_which_tools_were_called() -> None:
     report = await llm_report(facts(), model)
 
     assert (report.source, report.tools_used) == ("template", ["get_miss_patterns"])
+
+
+# ---------- Steps, for a page to show the coach working ----------
+
+
+class Steps:
+    def __init__(self) -> None:
+        self.heard: list[str] = []
+
+    async def __call__(self, text: str) -> None:
+        self.heard.append(text)
+
+
+def test_every_tool_has_a_step() -> None:
+    assert set(TOOL_STEPS) == set(TOOLS)
+
+
+async def test_the_steps_in_order() -> None:
+    steps = Steps()
+    model = FakeModel(calls("get_skill_profile", "get_miss_patterns"), text("ok"), words())
+
+    report = await llm_report(facts(), model, steps)
+
+    assert report.source == "llm"
+    assert steps.heard == [
+        STARTING,
+        "Looking up your skills",
+        "Looking at where you miss",
+        WRITING,
+    ]
+
+
+async def test_an_unknown_tool_still_has_a_step() -> None:
+    steps = Steps()
+
+    await llm_report(facts(), FakeModel(calls("get_pp"), text("ok"), words()), steps)
+
+    assert steps.heard == [STARTING, "Looking up get_pp", WRITING]
+
+
+async def test_a_failure_stops_the_steps() -> None:
+    # The model can't be reached at once: it started, and nothing after.
+    steps = Steps()
+
+    report = await llm_report(facts(), FakeModel(LLMError("down")), steps)
+
+    assert report.source == "template"
+    assert steps.heard == [STARTING]
+
+
+async def test_steps_are_optional() -> None:
+    report = await llm_report(facts(), FakeModel(text("ok"), words()))
+
+    assert report.source == "llm"

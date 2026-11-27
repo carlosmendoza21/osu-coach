@@ -16,7 +16,7 @@ This keeps a small local model dependable, and makes every report checkable.
 
 import json
 import re
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 from pydantic import BaseModel, ValidationError
@@ -267,8 +267,28 @@ def merge(report: Report, written: Written, allowed: set[float] | None = None) -
     )
 
 
-async def llm_report(facts: CoachFacts, client: LLMClient) -> Report:
-    """The model's report, or the template one (with the reason) if it can't be used."""
+# What the coach is doing, for a page to show while it works (a report takes minutes on a
+# laptop's CPU).
+STARTING = "Reading your profile"
+WRITING = "Writing your report"
+TOOL_STEPS = {
+    "get_skill_profile": "Looking up your skills",
+    "get_replay_analysis": "Looking at your uploaded replays",
+    "get_miss_patterns": "Looking at where you miss",
+    "search_beatmaps": "Looking at your practice maps",
+}
+
+OnStep = Callable[[str], Awaitable[None]]
+
+
+async def no_steps(_: str) -> None:
+    return None
+
+
+async def llm_report(facts: CoachFacts, client: LLMClient, on_step: OnStep = no_steps) -> Report:
+    """The model's report, or the template one (with the reason) if it can't be used.
+    `on_step` hears what it's doing as it goes: STARTING, a TOOL_STEPS line for each
+    lookup, then WRITING."""
     template = template_report(facts)
     tools = [tool for tool, _ in TOOLS.values()]
     messages: list[Message] = [
@@ -277,6 +297,7 @@ async def llm_report(facts: CoachFacts, client: LLMClient) -> Report:
     ]
     used: list[str] = []
     try:
+        await on_step(STARTING)
         # Looking things up: the model calls tools until it has what it wants.
         for _ in range(MAX_TOOL_ROUNDS):
             reply = await client.chat(messages, tools=tools)
@@ -284,9 +305,11 @@ async def llm_report(facts: CoachFacts, client: LLMClient) -> Report:
                 break
             messages.append(reply.message)
             for call in reply.tool_calls:
+                await on_step(TOOL_STEPS.get(call.name, f"Looking up {call.name}"))
                 used.append(call.name)
                 messages.append(tool_result(call, run_tool(call.name, facts)))
         # Writing: the report's words, in a fixed shape.
+        await on_step(WRITING)
         skills = [w.skill for w in template.weaknesses]
         messages.append({"role": "user", "content": writing_prompt(template)})
         reply = await client.chat(messages, schema=writing_schema(skills))

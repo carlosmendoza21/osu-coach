@@ -23,10 +23,10 @@ from sqlalchemy.ext.asyncio import (
 )
 from sqlalchemy.pool import NullPool
 
-from osu_coach.api.coach import get_llm
+from osu_coach.api.coach import get_llm_factory
 from osu_coach.coach import gather_facts, replay_facts, template_report
 from osu_coach.db import get_session
-from osu_coach.llm import LLMClient, LLMError, Message, Reply, Tool
+from osu_coach.llm import LLMClient, LLMError, Message, Reply, Tool, ToolCall
 from osu_coach.main import create_app
 from tests.support import ALL_TABLES
 
@@ -220,7 +220,11 @@ async def test_a_player_without_practice_maps(engine: Engine, session: AsyncSess
 
 
 async def call(
-    db: AsyncEngine, method: str, path: str, llm: LLMClient | None = None
+    db: AsyncEngine,
+    method: str,
+    path: str,
+    llm: LLMClient | None = None,
+    headers: dict[str, str] | None = None,
 ) -> httpx.Response:
     """A request to the app over this database. The model is always set here (none by
     default): a COACH_LLM in a developer's .env must not reach these tests."""
@@ -231,10 +235,10 @@ async def call(
             yield s
 
     app.dependency_overrides[get_session] = session
-    app.dependency_overrides[get_llm] = lambda: llm
+    app.dependency_overrides[get_llm_factory] = lambda: lambda http: llm
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-        return await client.request(method, path)
+        return await client.request(method, path, headers=headers)
 
 
 async def test_the_report(db: AsyncEngine, session: AsyncSession) -> None:
@@ -280,13 +284,20 @@ class FakeModel:
 
     name = "fake:model"
 
-    def __init__(self, error: Exception | None = None) -> None:
+    def __init__(self, error: Exception | None = None, lookups: list[str] | None = None) -> None:
         self.error = error
+        self.lookups = list(lookups or [])  # tools to call on the first turn
 
     async def chat(self, messages: list[Message], tools: list[Tool] | None = None,
                    schema: dict[str, Any] | None = None) -> Reply:  # fmt: skip
         if self.error:
             raise self.error
+        if schema is None and self.lookups:
+            calls = [ToolCall(n, {}) for n in self.lookups]
+            message = {"role": "assistant", "content": "",
+                       "tool_calls": [{"function": {"name": n}} for n in self.lookups]}  # fmt: skip
+            self.lookups = []
+            return Reply("", calls, message)
         if schema is None:
             return Reply("Ready.", [], {"role": "assistant", "content": "Ready."})
         skills = schema["properties"]["weaknesses"]["items"]["properties"]["skill"]["enum"]
@@ -335,3 +346,97 @@ async def test_no_model_is_asked_for_an_unscored_player(db: AsyncEngine) -> None
     )
 
     assert resp.status_code == 409
+
+
+# ---------- The report as a stream (server-sent events) ----------
+
+STREAM = {"Accept": "text/event-stream"}
+
+
+def events(resp: httpx.Response) -> list[dict[str, Any]]:
+    """The events in a stream's body: each a data line of JSON, then a blank line."""
+    assert resp.text.endswith("\n\n")
+    blocks = resp.text.split("\n\n")[:-1]
+    assert all(b.startswith("data: ") and "\n" not in b for b in blocks)
+    return [json.loads(b.removeprefix("data: ")) for b in blocks]
+
+
+async def test_a_template_report_is_one_event(db: AsyncEngine, session: AsyncSession) -> None:
+    resp = await call(db, "POST", "/players/2/report", headers=STREAM)
+
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("text/event-stream")
+    assert resp.headers["cache-control"] == "no-cache"
+    assert resp.headers["x-accel-buffering"] == "no"  # no proxy holds it back
+    facts = await gather_facts(session, 2)
+    assert facts is not None
+    assert events(resp) == [
+        {"type": "report", "report": template_report(facts).model_dump(mode="json")}
+    ]
+
+
+async def test_a_models_steps_then_its_report(db: AsyncEngine) -> None:
+    model = FakeModel(lookups=["get_skill_profile", "search_beatmaps"])
+
+    resp = await call(db, "POST", "/players/2/report", llm=model, headers=STREAM)
+
+    got = events(resp)
+    assert [e["text"] for e in got[:-1]] == [
+        "Reading your profile",
+        "Looking up your skills",
+        "Looking at your practice maps",
+        "Writing your report",
+    ]
+    assert all(e["type"] == "step" for e in got[:-1])
+    assert got[-1]["type"] == "report"  # the report is the last event
+    report = got[-1]["report"]
+    assert (report["source"], report["tools_used"]) == (
+        "llm",
+        ["get_skill_profile", "search_beatmaps"],
+    )
+
+
+async def test_a_model_that_fails_streams_the_template(db: AsyncEngine) -> None:
+    resp = await call(
+        db, "POST", "/players/2/report", llm=FakeModel(LLMError("down")), headers=STREAM
+    )
+
+    got = events(resp)
+    assert got[0] == {"type": "step", "text": "Reading your profile"}
+    assert got[-1]["report"]["source"] == "template"
+    assert got[-1]["report"]["fallback_reason"] == "the model couldn't be reached (down)"
+
+
+async def test_an_unexpected_failure_is_an_error_event(db: AsyncEngine) -> None:
+    # Edge: not one of the failures the coach falls back on (a bug, say): the stream
+    # says so instead of just stopping.
+    resp = await call(
+        db, "POST", "/players/2/report", llm=FakeModel(RuntimeError("bug")), headers=STREAM
+    )
+
+    got = events(resp)
+    assert resp.status_code == 200  # the stream had started
+    assert got[-1]["type"] == "error"
+    assert got[-1]["detail"].startswith("the report couldn't be written (RuntimeError('bug')")
+    assert not any(e["type"] == "report" for e in got)
+
+
+@pytest.mark.parametrize(
+    ("path", "status"),
+    [("/players/999/report", 404), ("/players/3/report", 409)],
+    ids=["unknown-player", "not-scored"],
+)
+async def test_errors_before_the_stream_are_plain(db: AsyncEngine, path: str, status: int) -> None:
+    # Known before anything is streamed: an ordinary error answer, not a stream.
+    resp = await call(db, "POST", path, headers=STREAM)
+
+    assert resp.status_code == status
+    assert resp.headers["content-type"].startswith("application/json")
+    assert "detail" in resp.json()
+
+
+async def test_json_unless_a_stream_is_asked_for(db: AsyncEngine) -> None:
+    resp = await call(db, "POST", "/players/2/report", headers={"Accept": "application/json"})
+
+    assert resp.headers["content-type"].startswith("application/json")
+    assert resp.json()["source"] == "template"

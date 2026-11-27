@@ -84,7 +84,7 @@ export default function RecommendationsPanel({ osuId }: { osuId: number }) {
     )
   }
   return (
-    <section className="recommendations" aria-label="Practice maps">
+    <section className="recommendations" aria-label="Practice maps" id="practice-maps">
       <h3>{heading}</h3>
       {body}
     </section>

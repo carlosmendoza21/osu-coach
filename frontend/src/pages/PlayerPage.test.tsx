@@ -1,6 +1,6 @@
 // Unit tests for the profile page, at /players/:username. fetch is replaced with a fake
 // that answers each request when the test says so.
-import { act, render, screen } from '@testing-library/react'
+import { act, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
@@ -134,6 +134,22 @@ test('the practice maps show under the skills, above the plays', async () => {
   expect(before(skillsPanel, practice)).toBe(true)
   expect(before(practice, top)).toBe(true)
   expect(practice).toHaveTextContent('Practice maps for Reading')
+})
+
+test('the coach sits between the skills and the practice maps, and waits to be asked', async () => {
+  at('/players/peppy')
+  await answer(PEPPY, Response.json(playerResponse()))
+
+  const skillsPanel = screen.getByRole('region', { name: 'Skills' })
+  const coach = screen.getByRole('region', { name: 'Coach' })
+  const practice = screen.getByRole('region', { name: 'Practice maps' })
+  const before = (a: Element, b: Element) => (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0
+  expect(before(skillsPanel, coach)).toBe(true)
+  expect(before(coach, practice)).toBe(true)
+  expect(practice).toHaveAttribute('id', 'practice-maps') // where the report's link goes
+  // A report can take minutes: nothing asks for one until the button is pressed.
+  expect(waiting.map((w) => w.url)).not.toContain('/api/players/2/report')
+  expect(within(coach).getByRole('button')).toHaveTextContent('Coach me')
 })
 
 test("the practice maps failing doesn't hide the rest", async () => {

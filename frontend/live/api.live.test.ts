@@ -19,20 +19,26 @@ import {
   getReplay,
   getReplayCharts,
   getSkills,
+  streamReport,
   uploadReplay,
 } from '../src/api'
 import type {
   Beatmap,
   ChartNote,
+  CoachEvent,
+  CoachReport,
+  PlanStep,
   Player,
   Recommendation,
   RecommendedMap,
   Recommendations,
   Replay,
   ReplayCharts,
+  ReportMap,
   ReplayDetail,
   Score,
   ScoreMap,
+  SkillNote,
   Skills,
   UploadResponse,
 } from '../src/types'
@@ -64,6 +70,11 @@ const NOTE = { idx: 1, time_ms: 1, result: 1, error_ms: 1, aim_error_px: 1, x: 1
   pattern: 1 } satisfies Record<keyof ChartNote, 1>
 const DETAIL = { replay: 1, beatmap: 1, status: 1, judged: 1, matches_official: 1,
   by_pattern: 1 } satisfies Record<keyof ReplayDetail, 1>
+const REPORT = { player_id: 1, username: 1, source: 1, summary: 1, strengths: 1, weaknesses: 1,
+  plan: 1, maps: 1, model: 1, tools_used: 1, fallback_reason: 1 } satisfies Record<keyof CoachReport, 1>
+const NOTE_FIELDS = { skill: 1, score: 1, evidence: 1, explanation: 1 } satisfies Record<keyof SkillNote, 1>
+const STEP_FIELDS = { skill: 1, text: 1 } satisfies Record<keyof PlanStep, 1>
+const REPORT_MAP = { beatmap_id: 1, name: 1, star_rating: 1, reason: 1 } satisfies Record<keyof ReportMap, 1>
 const RECS = { player_id: 1, target_skill: 1, comfort_stars: 1, created_at: 1,
   maps: 1 } satisfies Record<keyof Recommendations, 1>
 const REC = { rank: 1, score: 1, reason: 1, beatmap: 1 } satisfies Record<keyof Recommendation, 1>
@@ -194,6 +205,30 @@ describe.skipIf(!apiUp)('through the dev server, against the real API', () => {
     }
     expect(recs.maps.map((m) => m.rank)).toEqual(recs.maps.map((_, i) => i + 1))
   }, 90_000)
+
+  test("a player's coaching report streams in with exactly the declared fields", async () => {
+    // Through the dev server's proxy, as the page asks: steps (with a model), then the report.
+    const events: CoachEvent[] = []
+    await streamReport(2, (e) => events.push(e))
+
+    const last = events[events.length - 1]
+    expect(last.type).toBe('report')
+    expect(events.slice(0, -1).every((e) => e.type === 'step')).toBe(true)
+    const report = (last as { type: 'report'; report: CoachReport }).report
+    expect(fields(report)).toEqual(expected(REPORT))
+    expect(report.player_id).toBe(2)
+    expect(report.weaknesses).toHaveLength(3)
+    for (const n of [...report.strengths, ...report.weaknesses]) expect(fields(n)).toEqual(expected(NOTE_FIELDS))
+    for (const p of report.plan) expect(fields(p)).toEqual(expected(STEP_FIELDS))
+    for (const m of report.maps) expect(fields(m)).toEqual(expected(REPORT_MAP))
+  }, 900_000) // minutes, if the API has a local model on
+
+  test("an unknown player's report is the API's 404 before any stream", async () => {
+    const error = await streamReport(999_999_999, () => {}).catch((e: unknown) => e)
+
+    expect((error as ApiError).status).toBe(404)
+    expect((error as ApiError).message).toBe('player 999999999 not found')
+  })
 
   test("an unknown player's skills are the API's 404, with its reason", async () => {
     const error = await getSkills(999_999_999).catch((e: unknown) => e)
