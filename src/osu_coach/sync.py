@@ -1,5 +1,7 @@
 """Sync a player's profile and scores from osu! into the database."""
 
+import hashlib
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -17,6 +19,7 @@ class SyncResult:
     osu_id: int
     username: str
     scores: int  # how many distinct scores were saved
+    skipped: int = 0  # passed plays osu! hasn't given an id yet: saved on a later sync
 
 
 def player_values(user: OsuUser) -> dict[str, Any]:
@@ -30,6 +33,32 @@ def player_values(user: OsuUser) -> dict[str, Any]:
         "playcount": user.statistics.play_count,
         "accuracy": user.statistics.hit_accuracy,
     }
+
+
+def failed_play_id(score: OsuScore) -> int:
+    """A stable id for a failed play, which osu! sends with id 0: from the player, the
+    map and the time it was played, so the same play gets the same id on every sync.
+    Negative, so it can never clash with a real osu! score id."""
+    key = f"{score.user_id}:{score.beatmap.id}:{score.created_at.isoformat()}"
+    return -int(hashlib.sha256(key.encode()).hexdigest()[:15], 16)  # 60 bits: fits a BIGINT
+
+
+def keyed(scores: Sequence[OsuScore]) -> tuple[list[OsuScore], int]:
+    """The scores to save, each with an id that tells it apart, and how many were left
+    out. osu! sends id 0 for plays without a score id of their own: every failed play,
+    and passed plays it hasn't processed yet. Saved as they are, they'd all fold into
+    one row (ids are the table's key), whoever played them.
+    - A failed play never gets an id: it gets a stable one of its own (failed_play_id).
+    - A passed play gets its real id once osu! processes it: it's left out until then
+      (keying it now would leave a duplicate when the real id arrives).
+    """
+    kept: list[OsuScore] = []
+    for score in scores:
+        if score.id > 0:
+            kept.append(score)
+        elif not score.passed:
+            kept.append(score.model_copy(update={"id": failed_play_id(score)}))
+    return kept, len(scores) - len(kept)
 
 
 def score_values(score: OsuScore) -> dict[str, Any]:
@@ -152,7 +181,8 @@ async def sync_player(
     best = await osu.get_best_scores(profile.id, best_limit)
     recent = await osu.get_recent_scores(profile.id, recent_limit)
 
-    scores = [*best, *recent]
+    # Every play with an id of its own (see keyed); only the saved plays' maps are stored.
+    scores, skipped = keyed([*best, *recent])
     # Maps and the player first: scores reference both through foreign keys. The maps
     # come from the scores' own data, so this needs no extra requests to osu!.
     await upsert_beatmaps(session, [beatmap_values(s.beatmap, s.beatmapset) for s in scores])
@@ -160,4 +190,9 @@ async def sync_player(
     saved = await upsert_scores(session, scores)
     await session.commit()  # all or nothing, maps included
 
-    return SyncResult(osu_id=profile.id, username=profile.username, scores=saved)
+    return SyncResult(
+        osu_id=profile.id,
+        username=profile.username,
+        scores=saved,
+        skipped=skipped,
+    )

@@ -164,7 +164,7 @@ every push.
 On Windows, async database code needs a selector event loop (psycopg can't use the
 default one); `tests/conftest.py` sets it for the tests, and the worker task sets it too.
 
-**Unit tests** ([`tests/unit/`](tests/unit), 1264 tests): call the code directly with nothing
+**Unit tests** ([`tests/unit/`](tests/unit), 1296 tests): call the code directly with nothing
 running. `respx` fakes the osu! token endpoint (and blocks any unmocked request),
 `fakeredis` stands in for Redis, and the rate limiter gets a fake clock, so a 60 s window
 runs instantly.
@@ -558,7 +558,7 @@ would bring back the wait this avoids).
 - Only the indexes queries use: `username` (not unique: names can be reused), `beatmap_id`,
   and `(player_id, pp)`; the checksum's unique constraint is its index
 
-*Sync* (31), with a fake osu! client serving the saved responses and a fake session whose
+*Sync* (63), with a fake osu! client serving the saved responses and a fake session whose
 statements are compiled to Postgres SQL:
 - `player_values` / `score_values` / `beatmap_values` fill every column from the right
   osu! field; a score's map and a full map give the same row except the max combo
@@ -570,6 +570,12 @@ statements are compiled to Postgres SQL:
 - Order: maps, then the player, then scores, then one commit; scores are fetched by the
   resolved id; limits are passed on
 - If osu! fails at any of the three requests, nothing is written
+- Plays osu! sends with id 0 (every failed play, and passed plays it hasn't processed
+  yet; a real saved failed play has it): a play with an id is kept as it is; a failed
+  play gets a stable id of its own from the player, the map and the time, negative (never
+  a real id), within a BIGINT and never 0, the same on every sync and different for
+  another player, map or time (a second later); a passed one is skipped until it has its
+  id, and so is its map, and the sync counts it; the order is kept
 
 *`GET /players/{username}`* (23), with a fake sync, replaced queries and a fake session:
 - A fresh player is served without syncing; a stale or unknown one is synced, then
@@ -591,7 +597,7 @@ statements are compiled to Postgres SQL:
 - The response has exactly the profile's fields, with the time in UTC; a username, a
   decimal or no id at all isn't an osu! id (`422`, `404`); the endpoint is documented
 
-**Integration tests** ([`tests/integration/`](tests/integration), 289 tests): use real
+**Integration tests** ([`tests/integration/`](tests/integration), 294 tests): use real
 Redis, real time, real processes, and the real osu! API with the credentials in `.env`.
 They skip with the reason if Redis isn't running (`docker compose up -d redis`) or the
 credentials are missing, and clean up their Redis keys even if a check fails.
@@ -642,15 +648,18 @@ migrated with Alembic exactly as deployment does, and dropped afterwards
   can have none), and a missing play date is refused
 - "A player's best scores" uses the `(player_id, pp)` index, already in pp order (no sort)
 
-*Migrations on existing data* (5, Postgres; also run in CI): each test starts at the
+*Migrations on existing data* (7, Postgres; also run in CI): each test starts at the
 revision before the beatmaps table, adds a player and scores on maps that aren't stored
 (the state a deployed database was in), then upgrades
 - The upgrade succeeds by removing those orphaned scores, keeps players, marks them stale
   so they re-sync, and adds the foreign key
 - Downgrading keeps players and drops the new table; upgrading again works; an empty
   database upgrades too
+- The shared id-0 score (`656c2b0ee3e6`): from the revision before it, with real scores, a
+  failed play with an id of its own and the one id-0 row, the upgrade removes only that
+  row; downgrading does nothing and upgrading again finds nothing more
 
-*Sync* (17, Postgres; also run in CI), on its own test database:
+*Sync* (20, Postgres; also run in CI), on its own test database:
 - A first sync saves the player and scores; a second gives the same rows (idempotent),
   moves `updated_at`, and updates changed values
 - Failed plays are saved without pp; a play in both lists is saved once; mods and the
@@ -660,8 +669,11 @@ revision before the beatmaps table, adds a player and scores on maps that aren't
 - Maps: every score's map is stored once with the right values (including the failed
   play's), retries of one map store it once, re-rated maps are updated, a known max combo
   survives a sync and a new one replaces it, and failures roll the maps back too
+- Failed plays (id 0 from osu!) on one map a minute apart are saved as two rows with ids
+  of their own, and syncing one again updates its row; a passed play without its id yet
+  is left out, with its map
 - A real sync of peppy from osu! stores every score's map, once (needs Redis and
-  credentials)
+  credentials; it found the id-0 plays: four of peppy's plays shared one row)
 
 *`GET /players/{username}`* (15, Postgres; also run in CI): the real queries, and the
 endpoint end to end with a sync that runs the real `sync_player` against a fake osu!
@@ -1230,6 +1242,12 @@ a map file's MD5 and break the fixtures on other machines.
 - `sync.py`: not removing duplicates, not setting `updated_at`, committing part-way,
   writing before all data is fetched, scores before the player, updating only some
   columns, ignoring the limit, a wrong play time, or dropping recent scores
+- Plays without an id and the migration (13 breaks): failed plays dropped or kept as id
+  0, passed id-0 plays kept as 0 or keyed too, the failed-play key ignoring the time, map
+  or player, positive ids, ids too big for a BIGINT, every play's map stored, the skipped
+  count not reported, and the migration removing nothing or every failed play (that one
+  first got through: the test's only failed play was the id-0 row; one with its own id
+  was added)
 - `api/players.py`: returning the method instead of calling it (`scalar_one_or_none`
   without `()`), a case-sensitive lookup, failed plays in best, either list in the wrong
   order, always or never resyncing, no `populate_existing`, no stale fallback, wrong

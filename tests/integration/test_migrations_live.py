@@ -22,6 +22,8 @@ pytestmark = pytest.mark.integration
 
 BEFORE_BEATMAPS = "117b390a05b1"  # players and scores, scores.beatmap_id with no foreign key
 BEATMAPS = "82b58b64c0eb"
+BEFORE_ID_ZERO = "3a01ad1786e9"  # recommendations: the shared id-0 score still possible
+ID_ZERO = "656c2b0ee3e6"
 
 
 # ---------- Preconditions and fixtures ----------
@@ -145,3 +147,59 @@ def test_upgrade_on_an_empty_database(url: URL, engine: Engine) -> None:
 
     assert scalar(engine, "SELECT count(*) FROM scores") == 0
     assert "beatmaps" in inspect(engine).get_table_names()
+
+
+# ---------- The shared id-0 score (656c2b0ee3e6) ----------
+
+
+def fill_id_zero_data(engine: Engine) -> None:
+    """Two players and a map; a real score each, a failed play with an id of its own, and
+    the one shared row with id 0 that syncs used to make of every failed play."""
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                "INSERT INTO players (osu_id, username, country, pp, playcount, accuracy) "
+                "VALUES (2, 'peppy', 'AU', 1, 1, 99), (3, 'other', 'XX', 1, 1, 99)"
+            )
+        )
+        conn.execute(
+            text(
+                "INSERT INTO beatmaps (id, beatmapset_id, artist, title, creator, version, "
+                "star_rating, ar, od, cs, hp, bpm, length_s, hit_length_s, count_circles, "
+                "count_sliders, count_spinners, status, mode) VALUES (1, 1, 'a', 't', 'c', 'v', "
+                "5, 9, 8, 4, 5, 180, 90, 80, 1, 0, 0, 'ranked', 'osu')"
+            )
+        )
+        conn.execute(text(
+            "INSERT INTO scores (id, player_id, beatmap_id, score, max_combo, count_300, "
+            "count_100, count_50, count_miss, rank, pp, mods, date, accuracy, passed) VALUES "
+            "(11, 2, 1, 1, 1, 1, 0, 0, 0, 'S', 10, '{}', now(), 0.98, true), "
+            "(12, 3, 1, 1, 1, 1, 0, 0, 0, 'S', 10, '{}', now(), 0.98, true), "
+            "(13, 2, 1, 1, 1, 1, 0, 0, 4, 'F', NULL, '{}', now(), 0.90, false), "
+            "(0, 3, 1, 1, 1, 1, 0, 0, 9, 'F', NULL, '{}', now(), 0.80, false)"))  # fmt: skip
+
+
+def test_the_shared_id_zero_score_is_removed(url: URL, engine: Engine) -> None:
+    migrate(url, "upgrade", BEFORE_ID_ZERO)
+    fill_id_zero_data(engine)
+
+    migrate(url, "upgrade", ID_ZERO)
+
+    # Only that row: the real scores, a failed play with its own id, both players and the
+    # map are kept.
+    assert scalar(engine, "SELECT array_agg(id ORDER BY id) FROM scores") == [11, 12, 13]
+    assert scalar(engine, "SELECT count(*) FROM players") == 2
+    assert scalar(engine, "SELECT count(*) FROM beatmaps") == 1
+
+
+def test_removing_it_twice_and_back_is_harmless(url: URL, engine: Engine) -> None:
+    migrate(url, "upgrade", BEFORE_ID_ZERO)
+    fill_id_zero_data(engine)
+    migrate(url, "upgrade", ID_ZERO)
+
+    # Down does nothing (the row was a mix of plays: nothing to restore), and up again
+    # finds nothing more to remove.
+    migrate(url, "downgrade", BEFORE_ID_ZERO)
+    migrate(url, "upgrade", ID_ZERO)
+
+    assert scalar(engine, "SELECT array_agg(id ORDER BY id) FROM scores") == [11, 12, 13]

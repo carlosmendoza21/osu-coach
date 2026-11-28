@@ -17,6 +17,8 @@ from osu_coach.osu.schemas import OsuBeatmap, OsuScore, OsuUser
 from osu_coach.sync import (
     SyncResult,
     beatmap_values,
+    failed_play_id,
+    keyed,
     player_values,
     score_values,
     sync_player,
@@ -399,3 +401,120 @@ async def test_sync_saves_the_maps_of_best_and_recent() -> None:
     # Three distinct maps: best[0]'s map appears twice and is saved once.
     assert session.events[0] == "execute beatmaps"
     assert session.row_count(0) == 3
+
+
+# ---------- Plays osu! sends with id 0 ----------
+
+
+def play(score_id: int, passed: bool, map_id: int = 75, when: str = "2026-11-27T10:00:00Z",
+         player: int = 2) -> OsuScore:  # fmt: skip
+    """A play with these key fields; the rest from a real failed play."""
+    raw = load("score_recent_failed.json")
+    raw.update(id=score_id, passed=passed, user_id=player, created_at=when)
+    raw["beatmap"] = {**raw["beatmap"], "id": map_id}
+    return OsuScore.model_validate(raw)
+
+
+def saved_ids(session: FakeSession) -> list[int]:
+    """The ids in the scores insert, in order."""
+    [scores] = [
+        st for st in session.statements if "INSERT INTO scores" in str(st.compile(dialect=PG))
+    ]
+    params = scores.compile(dialect=PG).params
+    return [params[k] for k in sorted((k for k in params if k.startswith("id_m")),
+                                      key=lambda k: int(k[4:]))]  # fmt: skip
+
+
+KEYED_CASES = [
+    # (score id, passed, what happens)
+    pytest.param(123, True, "kept", id="a-passed-play"),
+    pytest.param(123, False, "kept", id="a-failed-play-with-an-id"),  # edge: kept as it is
+    pytest.param(0, False, "keyed", id="a-failed-play"),  # osu!'s usual: id 0
+    pytest.param(0, True, "skipped", id="a-passed-play-not-processed-yet"),
+]
+
+
+@pytest.mark.parametrize(("score_id", "passed", "outcome"), KEYED_CASES)
+def test_keyed(score_id: int, passed: bool, outcome: str) -> None:
+    score = play(score_id, passed)
+
+    kept, skipped = keyed([score])
+
+    if outcome == "skipped":
+        assert (kept, skipped) == ([], 1)
+        return
+    assert skipped == 0
+    [saved] = kept
+    expected = score.id if outcome == "kept" else failed_play_id(score)
+    assert saved.id == expected
+    # Only the id changes.
+    assert saved.model_dump(exclude={"id"}) == score.model_dump(exclude={"id"})
+
+
+def test_keyed_keeps_the_order_and_counts_what_it_skips() -> None:
+    plays = [play(1, True), play(0, True), play(0, False), play(2, False), play(0, True)]
+
+    kept, skipped = keyed(plays)
+
+    assert [s.id for s in kept] == [1, failed_play_id(plays[2]), 2]
+    assert skipped == 2
+
+
+def test_a_failed_plays_id_is_stable() -> None:
+    # The same play on every sync: the same id (so syncing again updates, not adds).
+    assert failed_play_id(play(0, False)) == failed_play_id(play(0, False))
+
+
+@pytest.mark.parametrize(
+    "other",
+    [
+        play(0, False, player=3),  # another player
+        play(0, False, map_id=76),  # another map
+        play(0, False, when="2026-11-27T10:00:01Z"),  # a second later
+    ],
+    ids=["player", "map", "time"],
+)
+def test_a_failed_plays_id_tells_plays_apart(other: OsuScore) -> None:
+    assert failed_play_id(other) != failed_play_id(play(0, False))
+
+
+@pytest.mark.parametrize("seed", range(20))
+def test_a_failed_plays_id_is_negative_and_fits_the_column(seed: int) -> None:
+    # Negative: never a real osu! score id. Within a BIGINT, and never 0.
+    score_id = failed_play_id(play(0, False, map_id=seed, when=f"2026-11-{seed + 1:02d}T00:00:00Z"))
+
+    assert -(2**63) <= score_id < 0
+
+
+async def test_sync_saves_each_failed_play_on_its_own() -> None:
+    # Two failed plays (both id 0 from osu!) on different maps, and a real best score.
+    first, second = play(0, False, map_id=75), play(0, False, map_id=76)
+    session = FakeSession()
+
+    result = await run_sync(FakeOsu(best=best_scores()[:1], recent=[first, second]), session)
+
+    assert result.scores == 3
+    assert saved_ids(session) == [
+        best_scores()[0].id,
+        failed_play_id(first),
+        failed_play_id(second),
+    ]
+    assert 0 not in saved_ids(session)
+
+
+async def test_sync_skips_unprocessed_passed_plays_and_their_maps() -> None:
+    waiting = play(0, True, map_id=999)  # a map no saved play is on
+    session = FakeSession()
+
+    result = await run_sync(FakeOsu(best=best_scores(), recent=[waiting]), session)
+
+    assert (result.scores, result.skipped) == (2, 1)
+    assert waiting.id not in saved_ids(session)
+    maps = session.statements[0].compile(dialect=PG).params
+    assert 999 not in maps.values()  # its map waits too
+
+
+async def test_nothing_skipped_is_zero() -> None:
+    result = await run_sync(FakeOsu(best=best_scores(), recent=[]), FakeSession())
+
+    assert result.skipped == 0

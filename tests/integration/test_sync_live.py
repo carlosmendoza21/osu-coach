@@ -9,6 +9,7 @@ FakeOsu (saved real responses), so they're exact and need no network.
 
 import asyncio
 from collections.abc import AsyncIterator, Iterator
+from datetime import datetime
 from typing import Any, cast
 
 import httpx
@@ -25,7 +26,13 @@ from osu_coach.osu.auth import TokenProvider
 from osu_coach.osu.client import OsuApiError, OsuClient
 from osu_coach.osu.ratelimiter import RateLimiter
 from osu_coach.osu.schemas import OsuBeatmap, OsuScore
-from osu_coach.sync import SyncResult, beatmap_values, sync_player, upsert_beatmaps
+from osu_coach.sync import (
+    SyncResult,
+    beatmap_values,
+    failed_play_id,
+    sync_player,
+    upsert_beatmaps,
+)
 from tests.support import ALL_TABLES, FakeOsu, best_scores, failed_score, load
 
 pytestmark = pytest.mark.integration
@@ -114,8 +121,56 @@ async def test_failed_play_is_saved_without_pp(db: AsyncEngine) -> None:
 
     await sync(db, FakeOsu(recent=[failed]))
 
-    (row,) = await query(db, f"SELECT pp, passed, rank FROM scores WHERE id = {failed.id}")
+    # osu! sends a failed play with id 0: it's saved under a stable id of its own.
+    assert failed.id == 0
+    (row,) = await query(
+        db, f"SELECT pp, passed, rank FROM scores WHERE id = {failed_play_id(failed)}"
+    )
     assert (row.pp, row.passed, row.rank) == (None, False, "F")
+
+
+def failed_at(when: str, map_id: int | None = None) -> OsuScore:
+    """peppy's failed play (osu! sends it with id 0), at this time, on this map."""
+    # model_copy doesn't parse: the time must already be a datetime.
+    played = datetime.fromisoformat(when)
+    play = failed_score().model_copy(update={"user_id": 2, "created_at": played})
+    if map_id is not None:
+        play = play.model_copy(update={"beatmap": play.beatmap.model_copy(update={"id": map_id})})
+    return play
+
+
+async def test_failed_plays_are_saved_apart(db: AsyncEngine) -> None:
+    # Two failed plays on the same map, a minute apart: both kept, neither as id 0.
+    first = failed_at("2026-11-27T10:00:00Z")
+    second = failed_at("2026-11-27T10:01:00Z")
+
+    result = await sync(db, FakeOsu(best=[], recent=[first, second]))
+
+    rows = await query(db, "SELECT id FROM scores ORDER BY id")
+    assert result.scores == 2
+    assert sorted(r.id for r in rows) == sorted([failed_play_id(first), failed_play_id(second)])
+    assert all(r.id < 0 for r in rows)
+
+
+async def test_syncing_a_failed_play_again_updates_it(db: AsyncEngine) -> None:
+    play = failed_at("2026-11-27T10:00:00Z")
+
+    await sync(db, FakeOsu(best=[], recent=[play]))
+    await sync(db, FakeOsu(best=[], recent=[play]))
+
+    assert await counts(db) == (1, 1)  # one row, not one per sync
+
+
+async def test_an_unprocessed_passed_play_waits(db: AsyncEngine) -> None:
+    # osu! sends a passed play with id 0 until it's processed: not saved, nor its map.
+    waiting = best_scores()[1].model_copy(update={"id": 0})
+
+    result = await sync(db, FakeOsu(best=best_scores()[:1], recent=[waiting]))
+
+    assert (result.scores, result.skipped) == (1, 1)
+    assert await counts(db) == (1, 1)
+    assert await map_count(db) == 1  # only the saved play's map
+    assert await query(db, "SELECT id FROM scores WHERE id = 0") == []
 
 
 async def test_score_in_best_and_recent_is_saved_once(db: AsyncEngine) -> None:
