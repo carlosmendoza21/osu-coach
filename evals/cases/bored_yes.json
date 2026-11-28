@@ -1,0 +1,1100 @@
+{
+ "name": "bored_yes",
+ "exported_at": "2026-11-28T05:26:25.221624Z",
+ "facts": {
+  "player_id": 21207816,
+  "username": "bored yes",
+  "scores": {
+   "aim": 100.0,
+   "speed": 79.4,
+   "accuracy": 99.4,
+   "consistency": 72.7,
+   "stamina": 64.9,
+   "reading": 100.0
+  },
+  "plays": [
+   {
+    "accuracy": 0.9788838612368024,
+    "count_miss": 0,
+    "max_combo": 696,
+    "map_max_combo": 697,
+    "aim_difficulty": 6.101379871368408,
+    "speed_difficulty": 2.925909996032715,
+    "speed_note_count": 279.0299987792969,
+    "ar": 10.866666666666667,
+    "od": 10.911111111111111,
+    "mods": [
+     "HD",
+     "DT"
+    ]
+   },
+   {
+    "accuracy": 0.9932829554995802,
+    "count_miss": 0,
+    "max_combo": 595,
+    "map_max_combo": 595,
+    "aim_difficulty": 5.978630065917969,
+    "speed_difficulty": 2.6857500076293945,
+    "speed_note_count": 264.8900146484375,
+    "ar": 10.866666666666667,
+    "od": 10.844444444444443,
+    "mods": [
+     "HD",
+     "DT"
+    ]
+   },
+   {
+    "accuracy": 0.9568345323741008,
+    "count_miss": 0,
+    "max_combo": 589,
+    "map_max_combo": 591,
+    "aim_difficulty": 6.000370025634766,
+    "speed_difficulty": 3.6146199703216553,
+    "speed_note_count": 83.48200225830078,
+    "ar": 10.8,
+    "od": 10.911111111111111,
+    "mods": [
+     "HD",
+     "NC"
+    ]
+   },
+   {
+    "accuracy": 0.9922299922299922,
+    "count_miss": 0,
+    "max_combo": 601,
+    "map_max_combo": 601,
+    "aim_difficulty": 5.835249900817871,
+    "speed_difficulty": 3.315239906311035,
+    "speed_note_count": 92.5343017578125,
+    "ar": 10.733333333333334,
+    "od": 10.644444444444446,
+    "mods": [
+     "HD",
+     "DT"
+    ]
+   },
+   {
+    "accuracy": 0.9683544303797469,
+    "count_miss": 3,
+    "max_combo": 640,
+    "map_max_combo": 740,
+    "aim_difficulty": 6.616919994354248,
+    "speed_difficulty": 2.9973299503326416,
+    "speed_note_count": 264.47698974609375,
+    "ar": 10.866666666666667,
+    "od": 10.911111111111111,
+    "mods": [
+     "HD",
+     "DT"
+    ]
+   },
+   {
+    "accuracy": 0.9785185185185186,
+    "count_miss": 3,
+    "max_combo": 420,
+    "map_max_combo": 584,
+    "aim_difficulty": 6.390989780426025,
+    "speed_difficulty": 2.905709981918335,
+    "speed_note_count": 391.4670104980469,
+    "ar": 10.866666666666667,
+    "od": 10.777777777777779,
+    "mods": [
+     "HD",
+     "DT"
+    ]
+   },
+   {
+    "accuracy": 0.9946409431939979,
+    "count_miss": 1,
+    "max_combo": 245,
+    "map_max_combo": 436,
+    "aim_difficulty": 6.132649898529053,
+    "speed_difficulty": 2.7939000129699707,
+    "speed_note_count": 245.56100463867188,
+    "ar": 11.0,
+    "od": 11.111111111111112,
+    "mods": [
+     "HD",
+     "HR",
+     "DT"
+    ]
+   },
+   {
+    "accuracy": 0.9730941704035875,
+    "count_miss": 0,
+    "max_combo": 316,
+    "map_max_combo": 319,
+    "aim_difficulty": 6.003910064697266,
+    "speed_difficulty": 2.6122000217437744,
+    "speed_note_count": 174.2209930419922,
+    "ar": 11.0,
+    "od": 11.111111111111112,
+    "mods": [
+     "HD",
+     "HR",
+     "DT"
+    ]
+   },
+   {
+    "accuracy": 0.9804964539007093,
+    "count_miss": 1,
+    "max_combo": 169,
+    "map_max_combo": 256,
+    "aim_difficulty": 6.343649864196777,
+    "speed_difficulty": 2.6672799587249756,
+    "speed_note_count": 159.23800659179688,
+    "ar": 11.0,
+    "od": 11.111111111111112,
+    "mods": [
+     "HD",
+     "HR",
+     "DT"
+    ]
+   },
+   {
+    "accuracy": 0.9895833333333334,
+    "count_miss": 2,
+    "max_combo": 139,
+    "map_max_combo": 259,
+    "aim_difficulty": 6.3969597816467285,
+    "speed_difficulty": 2.697700023651123,
+    "speed_note_count": 160.94000244140625,
+    "ar": 10.866666666666667,
+    "od": 10.911111111111111,
+    "mods": [
+     "HD",
+     "DT"
+    ]
+   },
+   {
+    "accuracy": 0.9749430523917996,
+    "count_miss": 3,
+    "max_combo": 258,
+    "map_max_combo": 590,
+    "aim_difficulty": 6.5761799812316895,
+    "speed_difficulty": 2.8102900981903076,
+    "speed_note_count": 318.9179992675781,
+    "ar": 10.8,
+    "od": 10.911111111111111,
+    "mods": [
+     "HD",
+     "DT"
+    ]
+   },
+   {
+    "accuracy": 0.9937106918238994,
+    "count_miss": 0,
+    "max_combo": 600,
+    "map_max_combo": 600,
+    "aim_difficulty": 5.792200088500977,
+    "speed_difficulty": 2.983599901199341,
+    "speed_note_count": 124.97699737548828,
+    "ar": 10.666666666666668,
+    "od": 10.777777777777779,
+    "mods": [
+     "HD",
+     "DT"
+    ]
+   },
+   {
+    "accuracy": 0.9908361970217641,
+    "count_miss": 0,
+    "max_combo": 471,
+    "map_max_combo": 472,
+    "aim_difficulty": 5.980179786682129,
+    "speed_difficulty": 2.6141200065612793,
+    "speed_note_count": 157.8719940185547,
+    "ar": 10.733333333333334,
+    "od": 10.777777777777779,
+    "mods": [
+     "HD",
+     "DT"
+    ]
+   },
+   {
+    "accuracy": 0.9728395061728395,
+    "count_miss": 6,
+    "max_combo": 185,
+    "map_max_combo": 731,
+    "aim_difficulty": 6.663959980010986,
+    "speed_difficulty": 3.127239942550659,
+    "speed_note_count": 459.2690124511719,
+    "ar": 10.866666666666667,
+    "od": 10.844444444444443,
+    "mods": [
+     "HD",
+     "DT"
+    ]
+   },
+   {
+    "accuracy": 0.9403544648943422,
+    "count_miss": 7,
+    "max_combo": 197,
+    "map_max_combo": 749,
+    "aim_difficulty": 7.037380218505859,
+    "speed_difficulty": 3.024139881134033,
+    "speed_note_count": 286.6189880371094,
+    "ar": 11.0,
+    "od": 11.111111111111112,
+    "mods": [
+     "HD",
+     "DT"
+    ]
+   },
+   {
+    "accuracy": 0.9915433403805497,
+    "count_miss": 0,
+    "max_combo": 722,
+    "map_max_combo": 722,
+    "aim_difficulty": 5.7306599617004395,
+    "speed_difficulty": 2.878509998321533,
+    "speed_note_count": 347.3559875488281,
+    "ar": 10.733333333333334,
+    "od": 10.71111111111111,
+    "mods": [
+     "HD",
+     "DT"
+    ]
+   },
+   {
+    "accuracy": 0.9698681732580038,
+    "count_miss": 0,
+    "max_combo": 252,
+    "map_max_combo": 252,
+    "aim_difficulty": 5.903540134429932,
+    "speed_difficulty": 2.555769920349121,
+    "speed_note_count": 139.1739959716797,
+    "ar": 11.0,
+    "od": 11.111111111111112,
+    "mods": [
+     "HD",
+     "HR",
+     "DT"
+    ]
+   },
+   {
+    "accuracy": 0.9830432842481035,
+    "count_miss": 2,
+    "max_combo": 765,
+    "map_max_combo": 1173,
+    "aim_difficulty": 6.171380043029785,
+    "speed_difficulty": 2.9089601039886475,
+    "speed_note_count": 399.06201171875,
+    "ar": 10.733333333333334,
+    "od": 10.71111111111111,
+    "mods": [
+     "HD",
+     "DT"
+    ]
+   },
+   {
+    "accuracy": 0.9954233409610984,
+    "count_miss": 0,
+    "max_combo": 567,
+    "map_max_combo": 575,
+    "aim_difficulty": 5.620580196380615,
+    "speed_difficulty": 2.75573992729187,
+    "speed_note_count": 262.4389953613281,
+    "ar": 10.733333333333334,
+    "od": 10.777777777777779,
+    "mods": [
+     "HD",
+     "DT"
+    ]
+   },
+   {
+    "accuracy": 0.9746192893401016,
+    "count_miss": 3,
+    "max_combo": 166,
+    "map_max_combo": 261,
+    "aim_difficulty": 6.528979778289795,
+    "speed_difficulty": 2.743720054626465,
+    "speed_note_count": 168.31199645996094,
+    "ar": 10.866666666666667,
+    "od": 10.911111111111111,
+    "mods": [
+     "HD",
+     "DT"
+    ]
+   },
+   {
+    "accuracy": 0.9548611111111112,
+    "count_miss": 1,
+    "max_combo": 333,
+    "map_max_combo": 479,
+    "aim_difficulty": 6.265880107879639,
+    "speed_difficulty": 2.527899980545044,
+    "speed_note_count": 115.88700103759766,
+    "ar": 11.0,
+    "od": 11.111111111111112,
+    "mods": [
+     "HD",
+     "HR",
+     "DT"
+    ]
+   },
+   {
+    "accuracy": 0.9702380952380952,
+    "count_miss": 1,
+    "max_combo": 325,
+    "map_max_combo": 418,
+    "aim_difficulty": 6.2044901847839355,
+    "speed_difficulty": 2.7872800827026367,
+    "speed_note_count": 205.72500610351562,
+    "ar": 10.8,
+    "od": 10.644444444444446,
+    "mods": [
+     "HD",
+     "DT"
+    ]
+   },
+   {
+    "accuracy": 0.9982502187226596,
+    "count_miss": 0,
+    "max_combo": 562,
+    "map_max_combo": 562,
+    "aim_difficulty": 5.619800090789795,
+    "speed_difficulty": 2.7648301124572754,
+    "speed_note_count": 170.8040008544922,
+    "ar": 10.733333333333334,
+    "od": 10.644444444444446,
+    "mods": [
+     "HD",
+     "DT"
+    ]
+   },
+   {
+    "accuracy": 0.9931972789115646,
+    "count_miss": 0,
+    "max_combo": 790,
+    "map_max_combo": 791,
+    "aim_difficulty": 5.508039951324463,
+    "speed_difficulty": 2.712100028991699,
+    "speed_note_count": 321.4519958496094,
+    "ar": 10.733333333333334,
+    "od": 10.844444444444443,
+    "mods": [
+     "HD",
+     "NC"
+    ]
+   },
+   {
+    "accuracy": 0.974937343358396,
+    "count_miss": 2,
+    "max_combo": 838,
+    "map_max_combo": 1323,
+    "aim_difficulty": 5.803299903869629,
+    "speed_difficulty": 3.3994100093841553,
+    "speed_note_count": 180.5749969482422,
+    "ar": 10.8,
+    "od": 10.577777777777778,
+    "mods": [
+     "HD",
+     "DT"
+    ]
+   },
+   {
+    "accuracy": 0.9933110367892977,
+    "count_miss": 0,
+    "max_combo": 394,
+    "map_max_combo": 394,
+    "aim_difficulty": 5.68310022354126,
+    "speed_difficulty": 3.1431899070739746,
+    "speed_note_count": 137.7310028076172,
+    "ar": 10.733333333333334,
+    "od": 10.444444444444445,
+    "mods": [
+     "HD",
+     "DT"
+    ]
+   },
+   {
+    "accuracy": 0.9653243847874721,
+    "count_miss": 1,
+    "max_combo": 206,
+    "map_max_combo": 401,
+    "aim_difficulty": 6.111999988555908,
+    "speed_difficulty": 2.434770107269287,
+    "speed_note_count": 240.08099365234375,
+    "ar": 11.0,
+    "od": 11.111111111111112,
+    "mods": [
+     "HD",
+     "HR",
+     "DT"
+    ]
+   },
+   {
+    "accuracy": 0.9938837920489296,
+    "count_miss": 0,
+    "max_combo": 315,
+    "map_max_combo": 315,
+    "aim_difficulty": 5.752749919891357,
+    "speed_difficulty": 2.569309949874878,
+    "speed_note_count": 144.4739990234375,
+    "ar": 10.8,
+    "od": 10.911111111111111,
+    "mods": [
+     "HD",
+     "DT"
+    ]
+   },
+   {
+    "accuracy": 0.9566074950690335,
+    "count_miss": 2,
+    "max_combo": 311,
+    "map_max_combo": 515,
+    "aim_difficulty": 6.344709873199463,
+    "speed_difficulty": 2.884190082550049,
+    "speed_note_count": 234.19400024414062,
+    "ar": 10.866666666666667,
+    "od": 10.97777777777778,
+    "mods": [
+     "HD",
+     "DT"
+    ]
+   },
+   {
+    "accuracy": 0.9771986970684039,
+    "count_miss": 1,
+    "max_combo": 423,
+    "map_max_combo": 506,
+    "aim_difficulty": 6.0319600105285645,
+    "speed_difficulty": 2.8281099796295166,
+    "speed_note_count": 180.47900390625,
+    "ar": 11.0,
+    "od": 11.111111111111112,
+    "mods": [
+     "HD",
+     "HR",
+     "DT"
+    ]
+   },
+   {
+    "accuracy": 0.958904109589041,
+    "count_miss": 0,
+    "max_combo": 445,
+    "map_max_combo": 450,
+    "aim_difficulty": 5.865139961242676,
+    "speed_difficulty": 3.2665200233459473,
+    "speed_note_count": 68.05359649658203,
+    "ar": 10.733333333333334,
+    "od": 10.71111111111111,
+    "mods": [
+     "HD",
+     "DT"
+    ]
+   },
+   {
+    "accuracy": 0.9674223341729639,
+    "count_miss": 8,
+    "max_combo": 886,
+    "map_max_combo": 2905,
+    "aim_difficulty": 6.223780155181885,
+    "speed_difficulty": 3.397520065307617,
+    "speed_note_count": 469.81500244140625,
+    "ar": 10.866666666666667,
+    "od": 10.97777777777778,
+    "mods": [
+     "HD",
+     "NC"
+    ]
+   },
+   {
+    "accuracy": 0.9601449275362319,
+    "count_miss": 2,
+    "max_combo": 80,
+    "map_max_combo": 250,
+    "aim_difficulty": 6.567009925842285,
+    "speed_difficulty": 2.6840500831604004,
+    "speed_note_count": 147.21400451660156,
+    "ar": 11.0,
+    "od": 11.111111111111112,
+    "mods": [
+     "HD",
+     "HR",
+     "DT"
+    ]
+   },
+   {
+    "accuracy": 0.9591611479028698,
+    "count_miss": 3,
+    "max_combo": 390,
+    "map_max_combo": 460,
+    "aim_difficulty": 6.391409873962402,
+    "speed_difficulty": 2.894850015640259,
+    "speed_note_count": 88.83090209960938,
+    "ar": 11.0,
+    "od": 11.111111111111112,
+    "mods": [
+     "HD",
+     "HR",
+     "DT"
+    ]
+   },
+   {
+    "accuracy": 0.9599483204134367,
+    "count_miss": 4,
+    "max_combo": 300,
+    "map_max_combo": 752,
+    "aim_difficulty": 6.60161018371582,
+    "speed_difficulty": 2.8460700511932373,
+    "speed_note_count": 344.34600830078125,
+    "ar": 10.8,
+    "od": 10.844444444444443,
+    "mods": [
+     "HD",
+     "DT"
+    ]
+   },
+   {
+    "accuracy": 0.9797551789077212,
+    "count_miss": 3,
+    "max_combo": 387,
+    "map_max_combo": 1103,
+    "aim_difficulty": 6.093299865722656,
+    "speed_difficulty": 2.988679885864258,
+    "speed_note_count": 195.4010009765625,
+    "ar": 10.866666666666667,
+    "od": 10.844444444444443,
+    "mods": [
+     "HD",
+     "DT"
+    ]
+   },
+   {
+    "accuracy": 0.9773299748110831,
+    "count_miss": 3,
+    "max_combo": 345,
+    "map_max_combo": 595,
+    "aim_difficulty": 6.328559875488281,
+    "speed_difficulty": 2.6687800884246826,
+    "speed_note_count": 230.7729949951172,
+    "ar": 10.866666666666667,
+    "od": 10.844444444444443,
+    "mods": [
+     "HD",
+     "DT"
+    ]
+   },
+   {
+    "accuracy": 0.9917929292929293,
+    "count_miss": 3,
+    "max_combo": 466,
+    "map_max_combo": 798,
+    "aim_difficulty": 6.048079967498779,
+    "speed_difficulty": 2.8652899265289307,
+    "speed_note_count": 392.6780090332031,
+    "ar": 10.8,
+    "od": 10.911111111111111,
+    "mods": [
+     "HD",
+     "DT"
+    ]
+   },
+   {
+    "accuracy": 0.9805352798053528,
+    "count_miss": 0,
+    "max_combo": 438,
+    "map_max_combo": 438,
+    "aim_difficulty": 5.726079940795898,
+    "speed_difficulty": 2.5916500091552734,
+    "speed_note_count": 172.6649932861328,
+    "ar": 10.8,
+    "od": 10.844444444444443,
+    "mods": [
+     "HD",
+     "DT"
+    ]
+   },
+   {
+    "accuracy": 0.9799846035411856,
+    "count_miss": 4,
+    "max_combo": 212,
+    "map_max_combo": 588,
+    "aim_difficulty": 6.290979862213135,
+    "speed_difficulty": 2.7951700687408447,
+    "speed_note_count": 345.2120056152344,
+    "ar": 10.733333333333334,
+    "od": 10.71111111111111,
+    "mods": [
+     "HD",
+     "DT"
+    ]
+   },
+   {
+    "accuracy": 0.9815668202764977,
+    "count_miss": 0,
+    "max_combo": 309,
+    "map_max_combo": 309,
+    "aim_difficulty": 5.655940055847168,
+    "speed_difficulty": 2.621999979019165,
+    "speed_note_count": 129.86500549316406,
+    "ar": 11.0,
+    "od": 11.111111111111112,
+    "mods": [
+     "HD",
+     "HR",
+     "NC"
+    ]
+   },
+   {
+    "accuracy": 0.8894927536231884,
+    "count_miss": 3,
+    "max_combo": 127,
+    "map_max_combo": 283,
+    "aim_difficulty": 6.787049770355225,
+    "speed_difficulty": 2.7815399169921875,
+    "speed_note_count": 115.66600036621094,
+    "ar": 11.0,
+    "od": 11.111111111111112,
+    "mods": [
+     "HD",
+     "HR",
+     "DT"
+    ]
+   },
+   {
+    "accuracy": 0.9803343166175025,
+    "count_miss": 0,
+    "max_combo": 867,
+    "map_max_combo": 1062,
+    "aim_difficulty": 5.744760036468506,
+    "speed_difficulty": 3.048219919204712,
+    "speed_note_count": 61.663700103759766,
+    "ar": 10.8,
+    "od": 10.777777777777779,
+    "mods": [
+     "HD",
+     "DT"
+    ]
+   },
+   {
+    "accuracy": 0.9900793650793651,
+    "count_miss": 1,
+    "max_combo": 243,
+    "map_max_combo": 255,
+    "aim_difficulty": 5.887619972229004,
+    "speed_difficulty": 2.6973800659179688,
+    "speed_note_count": 116.90899658203125,
+    "ar": 11.0,
+    "od": 11.111111111111112,
+    "mods": [
+     "HD",
+     "HR",
+     "DT"
+    ]
+   },
+   {
+    "accuracy": 0.9670818505338078,
+    "count_miss": 1,
+    "max_combo": 748,
+    "map_max_combo": 812,
+    "aim_difficulty": 5.800069808959961,
+    "speed_difficulty": 3.0007200241088867,
+    "speed_note_count": 430.4830017089844,
+    "ar": 10.866666666666667,
+    "od": 10.97777777777778,
+    "mods": [
+     "HD",
+     "DT"
+    ]
+   },
+   {
+    "accuracy": 0.9545454545454546,
+    "count_miss": 2,
+    "max_combo": 501,
+    "map_max_combo": 651,
+    "aim_difficulty": 6.148680210113525,
+    "speed_difficulty": 3.0061800479888916,
+    "speed_note_count": 422.3450012207031,
+    "ar": 10.8,
+    "od": 10.911111111111111,
+    "mods": [
+     "DT"
+    ]
+   },
+   {
+    "accuracy": 0.9962962962962963,
+    "count_miss": 0,
+    "max_combo": 528,
+    "map_max_combo": 529,
+    "aim_difficulty": 5.45674991607666,
+    "speed_difficulty": 3.0738799571990967,
+    "speed_note_count": 112.56099700927734,
+    "ar": 10.666666666666668,
+    "od": 10.71111111111111,
+    "mods": [
+     "HD",
+     "DT"
+    ]
+   },
+   {
+    "accuracy": 0.9578651685393258,
+    "count_miss": 2,
+    "max_combo": 235,
+    "map_max_combo": 250,
+    "aim_difficulty": 6.315700054168701,
+    "speed_difficulty": 2.6636500358581543,
+    "speed_note_count": 148.1060028076172,
+    "ar": 10.8,
+    "od": 10.844444444444443,
+    "mods": [
+     "HD",
+     "DT"
+    ]
+   },
+   {
+    "accuracy": 0.9804964539007093,
+    "count_miss": 1,
+    "max_combo": 139,
+    "map_max_combo": 258,
+    "aim_difficulty": 6.179590225219727,
+    "speed_difficulty": 2.6762900352478027,
+    "speed_note_count": 151.03599548339844,
+    "ar": 10.8,
+    "od": 10.911111111111111,
+    "mods": [
+     "HD",
+     "DT"
+    ]
+   },
+   {
+    "accuracy": 0.9678571428571429,
+    "count_miss": 3,
+    "max_combo": 389,
+    "map_max_combo": 401,
+    "aim_difficulty": 6.197969913482666,
+    "speed_difficulty": 2.509779930114746,
+    "speed_note_count": 186.62100219726562,
+    "ar": 11.0,
+    "od": 11.111111111111112,
+    "mods": [
+     "HD",
+     "HR",
+     "DT"
+    ]
+   }
+  ],
+  "replays": null,
+  "maps": [
+   {
+    "beatmap_id": 3954641,
+    "name": "DragonForce - Astral Empire [Break of Dawn]",
+    "star_rating": 9.18,
+    "reason": "12% of its notes in streams of 16+ at 224 BPM; 9.2★, 2.0★ below your comfort level (11.2★)"
+   },
+   {
+    "beatmap_id": 2128030,
+    "name": "SOOOO - Happppy song [i am a blessing to the world.]",
+    "star_rating": 9.72,
+    "reason": "13% of its notes in streams of 16+ at 226 BPM; 9.7★, 1.5★ below your comfort level (11.2★)"
+   },
+   {
+    "beatmap_id": 3970329,
+    "name": "Imperial Circus Dead Decadence - Jashin no Konrei, Gi wa Ai to Shiru. [Zetsubou no Hana]",
+    "star_rating": 9.08,
+    "reason": "19% of its notes in streams of 16+ at 240 BPM; 9.1★, 2.1★ below your comfort level (11.2★)"
+   },
+   {
+    "beatmap_id": 1874165,
+    "name": "Unlucky Morpheus - Angreifer [Scharfrichter]",
+    "star_rating": 8.92,
+    "reason": "30% of its notes in streams of 16+ at 220 BPM; 8.9★, 2.3★ below your comfort level (11.2★)"
+   },
+   {
+    "beatmap_id": 5774158,
+    "name": "Demonic Resurrection - The Eye Of Eternity [Greater than Gods]",
+    "star_rating": 10.36,
+    "reason": "14% of its notes in streams of 16+ at 230 BPM; 10.4★, 0.8★ below your comfort level (11.2★)"
+   },
+   {
+    "beatmap_id": 1029307,
+    "name": "Imperial Circus Dead Decadence - Shinbatsu o Tadori Kyoukotsu ni Itaru [Shuusa]",
+    "star_rating": 8.92,
+    "reason": "27% of its notes in streams of 16+ at 250 BPM; 8.9★, 2.3★ below your comfort level (11.2★)"
+   },
+   {
+    "beatmap_id": 5653824,
+    "name": "Inferi - The Ophidian Form [Fleshcoil]",
+    "star_rating": 9.47,
+    "reason": "26% of its notes in streams of 16+ at 220 BPM; 9.5★, 1.7★ below your comfort level (11.2★)"
+   },
+   {
+    "beatmap_id": 4124721,
+    "name": "Zornheym - Trifecta of Horrors [Bound By Horrors Old And Gone]",
+    "star_rating": 9.0,
+    "reason": "25% of its notes in streams of 16+ at 220 BPM; 9.0★, 2.2★ below your comfort level (11.2★)"
+   },
+   {
+    "beatmap_id": 1031991,
+    "name": "Imperial Circus Dead Decadence - Yomi yori Kikoyu, Koukoku no Tou to Honoo no Shoujo. [Kyouaku]",
+    "star_rating": 8.92,
+    "reason": "33% of its notes in streams of 16+ at 220 BPM; 8.9★, 2.3★ below your comfort level (11.2★)"
+   },
+   {
+    "beatmap_id": 5640431,
+    "name": "Xanthochroid - In Putris Stagnum [Mirage]",
+    "star_rating": 9.14,
+    "reason": "44% of its notes in streams of 16+ at 220 BPM; 9.1★, 2.1★ below your comfort level (11.2★)"
+   }
+  ]
+ },
+ "practice": {
+  "target_skill": "stamina",
+  "comfort_stars": 11.2,
+  "hardest_in_pool": 10.4766,
+  "maps": [
+   {
+    "beatmap_id": 3954641,
+    "beatmapset_id": 1877097,
+    "rank": 1,
+    "star_rating": 9.1794,
+    "ar": 10.0,
+    "od": 10.0,
+    "bpm": 224.0,
+    "hit_length_s": 317,
+    "vector": {
+     "jump": 0.0996,
+     "stream": 0.4593,
+     "slider": 0.2574,
+     "long_stream": 0.2668,
+     "spacing_under_1": 0.4659,
+     "spacing_1_2": 0.1956,
+     "spacing_2_3": 0.1651,
+     "spacing_3_4": 0.1258,
+     "spacing_4_up": 0.0476,
+     "bpm": 0.7467,
+     "stars": 0.9179
+    },
+    "played": false,
+    "reason": "12% of its notes in streams of 16+ at 224 BPM; 9.2★, 2.0★ below your comfort level (11.2★)"
+   },
+   {
+    "beatmap_id": 2128030,
+    "beatmapset_id": 1016769,
+    "rank": 2,
+    "star_rating": 9.7204,
+    "ar": 10.0,
+    "od": 10.0,
+    "bpm": 226.0,
+    "hit_length_s": 306,
+    "vector": {
+     "jump": 0.2045,
+     "stream": 0.202,
+     "slider": 0.3451,
+     "long_stream": 0.6595,
+     "spacing_under_1": 0.2981,
+     "spacing_1_2": 0.1932,
+     "spacing_2_3": 0.1298,
+     "spacing_3_4": 0.1484,
+     "spacing_4_up": 0.2304,
+     "bpm": 0.7533,
+     "stars": 0.972
+    },
+    "played": false,
+    "reason": "13% of its notes in streams of 16+ at 226 BPM; 9.7★, 1.5★ below your comfort level (11.2★)"
+   },
+   {
+    "beatmap_id": 3970329,
+    "beatmapset_id": 1923289,
+    "rank": 3,
+    "star_rating": 9.08334,
+    "ar": 10.0,
+    "od": 10.0,
+    "bpm": 240.0,
+    "hit_length_s": 293,
+    "vector": {
+     "jump": 0.0784,
+     "stream": 0.4565,
+     "slider": 0.2008,
+     "long_stream": 0.4171,
+     "spacing_under_1": 0.5168,
+     "spacing_1_2": 0.18,
+     "spacing_2_3": 0.1573,
+     "spacing_3_4": 0.1159,
+     "spacing_4_up": 0.03,
+     "bpm": 0.8,
+     "stars": 0.9083
+    },
+    "played": false,
+    "reason": "19% of its notes in streams of 16+ at 240 BPM; 9.1★, 2.1★ below your comfort level (11.2★)"
+   },
+   {
+    "beatmap_id": 1874165,
+    "beatmapset_id": 897087,
+    "rank": 4,
+    "star_rating": 8.92067,
+    "ar": 10.0,
+    "od": 10.0,
+    "bpm": 220.0,
+    "hit_length_s": 378,
+    "vector": {
+     "jump": 0.1691,
+     "stream": 0.4468,
+     "slider": 0.214,
+     "long_stream": 0.6823,
+     "spacing_under_1": 0.4292,
+     "spacing_1_2": 0.1431,
+     "spacing_2_3": 0.163,
+     "spacing_3_4": 0.1739,
+     "spacing_4_up": 0.0909,
+     "bpm": 0.7333,
+     "stars": 0.8921
+    },
+    "played": false,
+    "reason": "30% of its notes in streams of 16+ at 220 BPM; 8.9★, 2.3★ below your comfort level (11.2★)"
+   },
+   {
+    "beatmap_id": 5774158,
+    "beatmapset_id": 2588266,
+    "rank": 5,
+    "star_rating": 10.3575,
+    "ar": 10.0,
+    "od": 10.0,
+    "bpm": 230.0,
+    "hit_length_s": 359,
+    "vector": {
+     "jump": 0.042,
+     "stream": 0.5917,
+     "slider": 0.2192,
+     "long_stream": 0.2343,
+     "spacing_under_1": 0.4725,
+     "spacing_1_2": 0.2974,
+     "spacing_2_3": 0.1205,
+     "spacing_3_4": 0.0795,
+     "spacing_4_up": 0.0301,
+     "bpm": 0.7667,
+     "stars": 1.0
+    },
+    "played": false,
+    "reason": "14% of its notes in streams of 16+ at 230 BPM; 10.4★, 0.8★ below your comfort level (11.2★)"
+   },
+   {
+    "beatmap_id": 1029307,
+    "beatmapset_id": 482382,
+    "rank": 6,
+    "star_rating": 8.91737,
+    "ar": 10.0,
+    "od": 9.8,
+    "bpm": 250.0,
+    "hit_length_s": 259,
+    "vector": {
+     "jump": 0.0666,
+     "stream": 0.4064,
+     "slider": 0.2082,
+     "long_stream": 0.6612,
+     "spacing_under_1": 0.4772,
+     "spacing_1_2": 0.1988,
+     "spacing_2_3": 0.1615,
+     "spacing_3_4": 0.0974,
+     "spacing_4_up": 0.0651,
+     "bpm": 0.8333,
+     "stars": 0.8917
+    },
+    "played": false,
+    "reason": "27% of its notes in streams of 16+ at 250 BPM; 8.9★, 2.3★ below your comfort level (11.2★)"
+   },
+   {
+    "beatmap_id": 5653824,
+    "beatmapset_id": 2112254,
+    "rank": 7,
+    "star_rating": 9.47145,
+    "ar": 9.8,
+    "od": 9.8,
+    "bpm": 220.0,
+    "hit_length_s": 320,
+    "vector": {
+     "jump": 0.0818,
+     "stream": 0.5739,
+     "slider": 0.2288,
+     "long_stream": 0.4497,
+     "spacing_under_1": 0.5817,
+     "spacing_1_2": 0.183,
+     "spacing_2_3": 0.1018,
+     "spacing_3_4": 0.0815,
+     "spacing_4_up": 0.0519,
+     "bpm": 0.7333,
+     "stars": 0.9471
+    },
+    "played": false,
+    "reason": "26% of its notes in streams of 16+ at 220 BPM; 9.5★, 1.7★ below your comfort level (11.2★)"
+   },
+   {
+    "beatmap_id": 4124721,
+    "beatmapset_id": 1985773,
+    "rank": 8,
+    "star_rating": 9.00052,
+    "ar": 10.0,
+    "od": 10.0,
+    "bpm": 220.0,
+    "hit_length_s": 315,
+    "vector": {
+     "jump": 0.0355,
+     "stream": 0.5705,
+     "slider": 0.2217,
+     "long_stream": 0.4338,
+     "spacing_under_1": 0.5982,
+     "spacing_1_2": 0.1707,
+     "spacing_2_3": 0.0917,
+     "spacing_3_4": 0.0722,
+     "spacing_4_up": 0.0672,
+     "bpm": 0.7333,
+     "stars": 0.9001
+    },
+    "played": false,
+    "reason": "25% of its notes in streams of 16+ at 220 BPM; 9.0★, 2.2★ below your comfort level (11.2★)"
+   },
+   {
+    "beatmap_id": 1031991,
+    "beatmapset_id": 461744,
+    "rank": 9,
+    "star_rating": 8.92087,
+    "ar": 10.0,
+    "od": 9.4,
+    "bpm": 220.0,
+    "hit_length_s": 473,
+    "vector": {
+     "jump": 0.1289,
+     "stream": 0.4721,
+     "slider": 0.2159,
+     "long_stream": 0.706,
+     "spacing_under_1": 0.565,
+     "spacing_1_2": 0.0853,
+     "spacing_2_3": 0.1195,
+     "spacing_3_4": 0.153,
+     "spacing_4_up": 0.0773,
+     "bpm": 0.7333,
+     "stars": 0.8921
+    },
+    "played": false,
+    "reason": "33% of its notes in streams of 16+ at 220 BPM; 8.9★, 2.3★ below your comfort level (11.2★)"
+   },
+   {
+    "beatmap_id": 5640431,
+    "beatmapset_id": 2545928,
+    "rank": 10,
+    "star_rating": 9.14469,
+    "ar": 10.0,
+    "od": 10.0,
+    "bpm": 220.0,
+    "hit_length_s": 369,
+    "vector": {
+     "jump": 0.0681,
+     "stream": 0.6019,
+     "slider": 0.1775,
+     "long_stream": 0.7271,
+     "spacing_under_1": 0.4835,
+     "spacing_1_2": 0.2714,
+     "spacing_2_3": 0.1117,
+     "spacing_3_4": 0.1051,
+     "spacing_4_up": 0.0282,
+     "bpm": 0.7333,
+     "stars": 0.9145
+    },
+    "played": false,
+    "reason": "44% of its notes in streams of 16+ at 220 BPM; 9.1★, 2.1★ below your comfort level (11.2★)"
+   }
+  ]
+ }
+}

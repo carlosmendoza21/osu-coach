@@ -95,6 +95,29 @@ New migration after changing `src/osu_coach/models.py`:
 uv run alembic revision --autogenerate -m "describe change"
 ```
 
+### Evals
+
+The coach's reports are checked against saved eval cases in
+[`evals/cases/`](evals/cases): each is one player's coaching facts and practice maps,
+saved as JSON so a check needs no database and gives the same answer every run. The
+automatic checks: the report's structure (the three weakest skills, weakest first, the
+profile's scores, a plan step each), every number in a model's words being a fact, and
+the practice maps (for the weakest skill, one per mapset, none played, inside the star
+range the recommender allows, each with some of what the skill needs). `check` exits
+with 1 if any check fails.
+
+```bash
+uv run python -m osu_coach.evals check                          # template reports
+uv run python -m osu_coach.evals check --model ollama:qwen3:8b  # a model's (slow)
+uv run python -m osu_coach.evals export --all                   # save cases from the DB
+```
+
+Exporting picks each player's practice maps again first, so a case's maps match the map
+pool it records. On the 26 cases (mostly top players, so the weakest skills are
+consistency, stamina and, once, reading), template reports pass every check; on average
+a third of the practice maps fall inside the recommender's first star range, before it
+widens.
+
 ### Frontend
 
 React + TypeScript, built with Vite, in [`frontend/`](frontend). With the API running
@@ -141,7 +164,7 @@ every push.
 On Windows, async database code needs a selector event loop (psycopg can't use the
 default one); `tests/conftest.py` sets it for the tests, and the worker task sets it too.
 
-**Unit tests** ([`tests/unit/`](tests/unit), 1217 tests): call the code directly with nothing
+**Unit tests** ([`tests/unit/`](tests/unit), 1264 tests): call the code directly with nothing
 running. `respx` fakes the osu! token endpoint (and blocks any unmocked request),
 `fakeredis` stands in for Redis, and the rate limiter gets a fake clock, so a 60 s window
 runs instantly.
@@ -439,6 +462,24 @@ would bring back the wait this avoids).
   trimmed), nothing for an empty one, and a clear refusal for an unknown provider or a
   missing model
 
+*Evals* (47), on cases built by hand:
+- Cases: a player's facts saved and loaded back unchanged (with and without replays),
+  a case through JSON and back, cases read sorted by file name the same on every system
+  (Windows compares paths ignoring case: A, b, C there but A, C, b on Linux; the tests
+  caught it), none in an empty folder, and safe file names from usernames (spaces,
+  brackets, slashes, `..`, letters outside A-Z)
+- Structure: a template report passes; weaknesses out of order, a wrong score, missing
+  strengths or plan steps, or other maps each fail, saying what was found
+- Numbers: a template's words aren't checked; a model's facts, a tool's raw value (a UR
+  of 95.25 written 95.3), made-up numbers (9.7, 99.5, 1,000) and a missing explanation
+- Practice maps: good maps pass; none, no target, another skill, two from one mapset, a
+  played map, the edges of the allowed range (bottom in, top out), a map with none of
+  the skill's need; the allowed range itself (a step up, widened, centred on the hardest
+  map for a level above the pool, at the comfort level for accuracy) and none without
+  its inputs; the share in the first range as a measurement
+- The summary and the command: pass rates and means, fallbacks and failures listed;
+  `check` passing, failing (exit 1), with no cases, and limited; `export` needing players
+
 *LLM coaching report* (44), with a fake model that replays scripted answers:
 - The four tools, by the brief's names: the skill profile with every skill's evidence,
   the replays (raw UR, notes per pattern), misses by pattern worst first, the practice
@@ -550,7 +591,7 @@ statements are compiled to Postgres SQL:
 - The response has exactly the profile's fields, with the time in UTC; a username, a
   decimal or no id at all isn't an osu! id (`422`, `404`); the endpoint is documented
 
-**Integration tests** ([`tests/integration/`](tests/integration), 283 tests): use real
+**Integration tests** ([`tests/integration/`](tests/integration), 289 tests): use real
 Redis, real time, real processes, and the real osu! API with the credentials in `.env`.
 They skip with the reason if Redis isn't running (`docker compose up -d redis`) or the
 credentials are missing, and clean up their Redis keys even if a check fails.
@@ -796,6 +837,13 @@ and without asking for a stream, it's JSON as before.
 as in CI): `qwen3:8b` (or `OLLAMA_TEST_MODEL`) writes a report on hand-written facts in
 about 3 minutes on a laptop CPU: the facts are code's, and either every number in its
 words is a fact or it fell back to the template saying why.
+
+*Eval cases* (6, Postgres with pgvector; also run in CI), on the recommender tests'
+hand-made world: a player's case (their facts, and 10 practice maps for their weakest
+skill with ranks, vectors, reasons, the comfort level and the hardest map in the pool);
+export picks the maps (and stores them) first; a played map is left out, and one played
+after picking is marked in the snapshot; no case for an unscored or unknown player; and
+a case through JSON loads back as the coach gathers it, its template report passing.
 
 *Worker* (14, the full stack running): `fetch_beatmap` stores map 22423's 254 objects and
 its pattern vector (the one worked out from the file in the unit tests), and refuses a
@@ -1167,6 +1215,15 @@ Both suites were checked against deliberately broken code:
   steps not passed on, no error event, the report never sent, cached or buffered by a
   proxy, steps left in the queue when the report is done, and no starting, lookup or
   writing step
+- The evals (22 breaks): replays or vectors not saved, mods loaded as a list, played maps
+  never marked, maps not picked again, no hardest map, cases unsorted, unsafe file
+  names; the weakest skills strongest first, the wrong strengths, scores never compared,
+  a model's numbers never checked, a tool's numbers not facts, the strongest skill taken
+  as the weakest, mapsets never compared, played maps allowed, the range's top end
+  included, no widening allowed, no clamp above the pool, needs never checked, the
+  first-range share over 10, and `check` always passing. Three first got through, all
+  gaps in the tests, and fixing one found a real bug (the sort order differing between
+  Windows and Linux)
 
 `.gitattributes` marks `.osu` files as binary: git's `\r\n` to `\n` conversion would change
 a map file's MD5 and break the fixtures on other machines.
@@ -1219,7 +1276,9 @@ src/osu_coach/
   coach.py     a coaching report from a player's facts (the template report)
   coach_llm.py the report's words by an LLM: tools, the number check, the fallback
   llm.py       a small interface to chat models; Ollama (local, free) behind it
+  evals/       eval cases (cases.py), the automatic checks (checks.py), the command
 migrations/    Alembic
+evals/cases/   the eval cases, one player each, as JSON
 frontend/      React + TypeScript (Vite): src/api.ts calls the API, src/types.ts its responses,
                src/pages/ the pages (home, player, upload, replay), src/components/ the
                parts they share
